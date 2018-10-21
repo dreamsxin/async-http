@@ -21,9 +21,29 @@ abstract class HttpCodec
 {
     protected const DATE_RFC1123 = 'D, d M Y H:i:s \G\M\T';
         
-    protected const HEADER_REGEX = "(^([^()<>@,;:\\\"/[\]?={}\x01-\x20\x7F]++):[ \t]*+((?:[ \t]*+[\x21-\x7E\x80-\xFF]++)*+)[ \t]*+\r\n)m";
+    private const HEADER_REGEX = "(^([^()<>@,;:\\\"/[\]?={}\x01-\x20\x7F]++):[ \t]*+((?:[ \t]*+[\x21-\x7E\x80-\xFF]++)*+)[ \t]*+\r\n)m";
 
-    protected const HEADER_FOLD_REGEX = "(\r\n[ \t]++)";
+    private const HEADER_FOLD_REGEX = "(\r\n[ \t]++)";
+    
+    protected function populateHeaders(MessageInterface $message, string $header): MessageInterface
+    {
+        $m = null;
+        $count = \preg_match_all(self::HEADER_REGEX, $header, $m, \PREG_SET_ORDER);
+        
+        if ($count !== \substr_count($header, "\n")) {
+            if (\preg_match(self::HEADER_FOLD_REGEX, $header)) {
+                throw new \RuntimeException("Invalid HTTP header syntax: Obsolete line folding");
+            }
+            
+            throw new \RuntimeException("Invalid HTTP header syntax");
+        }
+        
+        foreach ($m as $v) {
+            $message = $message->withAddedHeader($v[1], $v[2]);
+        }
+        
+        return $message;
+    }
     
     protected function decodeBody(ReadableStream $stream, MessageInterface $message, string & $buffer, bool $close = false): MessageInterface
     {

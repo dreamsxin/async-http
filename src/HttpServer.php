@@ -129,21 +129,7 @@ class HttpServer extends HttpCodec
 
         $request = $this->factory->createServerRequest($m[1], $m[2]);
         $request = $request->withProtocolVersion($m[3]);
-
-        $header = \substr($header, $pos + 1);
-        $count = \preg_match_all(self::HEADER_REGEX, $header, $m, \PREG_SET_ORDER);
-
-        if ($count !== \substr_count($header, "\n")) {
-            if (\preg_match(self::HEADER_FOLD_REGEX, $header)) {
-                throw new \RuntimeException("Invalid HTTP header syntax: Obsolete line folding");
-            }
-
-            throw new \RuntimeException("Invalid HTTP header syntax");
-        }
-
-        foreach ($m as $v) {
-            $request = $request->withAddedHeader($v[1], $v[2]);
-        }
+        $request = $this->populateHeaders($request, \substr($header, $pos + 1));
 
         return $this->decodeBody($socket, $request, $buffer);
     }

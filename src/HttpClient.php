@@ -202,29 +202,14 @@ class HttpClient extends HttpCodec implements ClientInterface
         $pos = \strpos($header, "\n");
         $line = \substr($header, 0, $pos);
         $m = null;
-
         if (!\preg_match("'^\s*HTTP/(1\\.[01])\s+([1-5][0-9]{2})\s*(.*)$'is", $line, $m)) {
             throw new \RuntimeException('Invalid HTTP response line received');
         }
-
+        
         $response = $this->factory->createResponse((int) $m[2], \trim($m[3]));
         $response = $response->withProtocolVersion($m[1]);
-
-        $header = \substr($header, $pos + 1);
-        $count = \preg_match_all(self::HEADER_REGEX, $header, $m, \PREG_SET_ORDER);
-
-        if ($count !== \substr_count($header, "\n")) {
-            if (\preg_match(self::HEADER_FOLD_REGEX, $header)) {
-                throw new \RuntimeException("Invalid HTTP header syntax: Obsolete line folding");
-            }
-
-            throw new \RuntimeException("Invalid HTTP header syntax");
-        }
-
-        foreach ($m as $v) {
-            $response = $response->withAddedHeader($v[1], $v[2]);
-        }
-
+        $response = $this->populateHeaders($response, \substr($header, $pos + 1));
+        
         return $this->decodeBody($socket, $response, $buffer, true);
     }
 }
