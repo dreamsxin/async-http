@@ -1,2 +1,2 @@
-# psr-http
-Async PSR-HTTP client &amp; server
+# Async PSR HTTP Client & Server
+

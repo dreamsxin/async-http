@@ -1,0 +1,39 @@
+{
+	"name" : "concurrent-php/psr-http",
+	"description" : "Async PSR HTTP Client & Server",
+	"type" : "library",
+	"license" : "MIT",
+	"homepage" : "https://github.com/concurrent-php/psr-http",
+	"authors" : [{
+			"name" : "Martin Schröder",
+			"email" : "m.schroeder2007@gmail.com"
+		}
+	],
+	"minimum-stability" : "dev",
+	"prefer-stable" : true,
+	"require" : {
+		"php" : "~7.2",
+		"concurrent-php/async-api" : "dev-master",
+		"psr/http-client" : "~0.3",
+		"psr/http-server-handler" : "~1.0",
+		"psr/http-factory" : "~1.0",
+		"psr/log" : "~1.0",
+		"psr/http-message-implementation" : "1.0",
+		"psr/http-factory-implementation" : "1.0",
+		"psr/http-message" : "~1.0"
+	},
+	"require-dev" : {
+		"phpunit/phpunit" : "~7.4",
+		"nyholm/psr7" : "~1.0"
+	},
+	"autoload" : {
+		"psr-4" : {
+			"Concurrent\\Http\\" : "src/"
+		}
+	},
+	"autoload-dev" : {
+		"psr-4" : {
+			"Concurrent\\Http\\" : "test/src/"
+		}
+	}
+}
