@@ -29,35 +29,49 @@ abstract class HttpCodec
     {
         $m = null;
         $count = \preg_match_all(self::HEADER_REGEX, $header, $m, \PREG_SET_ORDER);
-        
+
         if ($count !== \substr_count($header, "\n")) {
             if (\preg_match(self::HEADER_FOLD_REGEX, $header)) {
                 throw new \RuntimeException("Invalid HTTP header syntax: Obsolete line folding");
             }
-            
+
             throw new \RuntimeException("Invalid HTTP header syntax");
         }
-        
+
         foreach ($m as $v) {
             $message = $message->withAddedHeader($v[1], $v[2]);
         }
-        
+
         return $message;
     }
-    
-    protected function decodeBody(ReadableStream $stream, MessageInterface $message, string & $buffer, bool $close = false): MessageInterface
+
+    protected function decodeBody(ReadableStream $stream, MessageInterface $message, string & $buffer): MessageInterface
     {
         if ($message->hasHeader('Content-Length')) {
             if (($len = (int) $message->getHeaderLine('Content-Length')) > 0) {
-                $message = $message->withBody(new IteratorStream($this->readLengthDelimitedBody($stream, $len, $buffer, $close)));
-            } elseif ($close) {
-                $stream->close();
+                $message = $message->withBody(new IteratorStream($this->readLengthDelimitedBody($stream, $len, $buffer)));
+            } elseif ($stream instanceof ClientStream) {
+                $stream->release();
             }
         } elseif ('chunked' == \strtolower($message->getHeaderLine('Transfer-Encoding'))) {
             $message = $message->withoutHeader('Transfer-Encoding');
-            $message = $message->withBody(new IteratorStream($this->readChunkEncodedBody($stream, $buffer, $close)));
-        } elseif ($close) {
-            $stream->close();
+            $message = $message->withBody(new IteratorStream($this->readChunkEncodedBody($stream, $buffer)));
+        } elseif ($stream instanceof ClientStream) {
+            if ($message->getProtocolVersion() == '1.0') {
+                if ('keep-alive' === \strtolower($message->getHeaderLine('Connection'))) {
+                    $stream->release();
+                } else {
+                    $stream->markDisposed();
+                    $message = $message->withBody($stream);
+                }
+            } else {
+                if ('close' === \strtolower($message->getHeaderLine('Connection'))) {
+                    $stream->markDisposed();
+                    $message = $message->withBody($stream);
+                } else {
+                    $stream->release();
+                }
+            }
         }
 
         if ('' !== ($encoding = $message->getHeaderLine('Content-Encoding'))) {
@@ -78,7 +92,7 @@ abstract class HttpCodec
         return $message;
     }
 
-    protected function readLengthDelimitedBody(ReadableStream $socket, int $len, string & $buffer, bool $close = false): \Generator
+    protected function readLengthDelimitedBody(ReadableStream $socket, int $len, string & $buffer): \Generator
     {
         try {
             while ($len > 0) {
@@ -97,14 +111,20 @@ abstract class HttpCodec
 
                 yield $chunk;
             }
-        } finally {
-            if ($close) {
-                $socket->close();
+
+            if ($socket instanceof ClientStream) {
+                $socket->release();
             }
+        } catch (\Throwable $e) {
+            if ($socket instanceof ClientStream) {
+                $socket->close($e);
+            }
+
+            throw $e;
         }
     }
 
-    protected function readChunkEncodedBody(ReadableStream $socket, string & $buffer, bool $close = false): \Generator
+    protected function readChunkEncodedBody(ReadableStream $socket, string & $buffer): \Generator
     {
         try {
             while (true) {
@@ -147,10 +167,16 @@ abstract class HttpCodec
 
                 $buffer = \substr($buffer, 2);
             }
-        } finally {
-            if ($close) {
-                $socket->close();
+
+            if ($socket instanceof ClientStream) {
+                $socket->release();
             }
+        } catch (\Throwable $e) {
+            if ($socket instanceof ClientStream) {
+                $socket->close($e);
+            }
+
+            throw $e;
         }
     }
 

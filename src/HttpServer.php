@@ -21,6 +21,7 @@ use Psr\Http\Message\ServerRequestFactoryInterface;
 use Psr\Http\Message\ServerRequestInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 class HttpServer extends HttpCodec
 {
@@ -37,7 +38,7 @@ class HttpServer extends HttpCodec
         $this->factory = $factory;
         $this->server = $server;
         $this->handler = $handler;
-        $this->logger = $logger;
+        $this->logger = $logger ?? new NullLogger();
     }
 
     public function run(): void

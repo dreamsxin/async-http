@@ -16,15 +16,30 @@ use Nyholm\Psr7\Factory\Psr17Factory;
 
 class HttpClientTest extends AsyncTestCase
 {
+    protected $logger;
+
+    protected $manager;
+
     protected $factory;
-    
+
     protected $client;
-    
+
     protected function setUp()
     {
         parent::setUp();
+
+        $this->manager = new ConnectionManager($this->logger);
+        $this->factory = new Psr17Factory();
+
+        $this->client = new HttpClient($this->manager, $this->factory, $this->logger);
+    }
+    
+    protected function tearDown()
+    {
+        $this->manager = null;
+        $this->client = null;
         
-        $this->client = new HttpClient($this->factory = new Psr17Factory());
+        parent::tearDown();
     }
     
     public function testStatusCode()
@@ -33,18 +48,22 @@ class HttpClientTest extends AsyncTestCase
         $response = $this->client->sendRequest($request);
         
         $this->assertEquals(201, $response->getStatusCode());
+        
+        $request = $this->factory->createRequest('GET', 'https://httpbin.org/status/204');
+        $response = $this->client->sendRequest($request);
+        
+        $this->assertEquals(204, $response->getStatusCode());
     }
     
     public function testResponseBody()
     {
         $request = $this->factory->createRequest('GET', 'https://httpbin.org/headers');
         $response = $this->client->sendRequest($request);
-        
+
         $this->assertEquals(200, $response->getStatusCode());
-        $this->assertEquals('close', $response->getHeaderLine('Connection'));
-        
+
         $body = \json_decode($response->getBody()->getContents(), true);
-        
-        $this->assertEquals('close', $body['headers']['Connection']);
+
+        $this->assertEquals('httpbin.org', $body['headers']['Host']);
     }
 }

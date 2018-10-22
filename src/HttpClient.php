@@ -13,30 +13,33 @@ declare(strict_types = 1);
 
 namespace Concurrent\Http;
 
-use Concurrent\Network\ClientEncryption;
 use Concurrent\Network\TcpSocket;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Log\LoggerInterface;
+use Psr\Log\NullLogger;
 
 class HttpClient extends HttpCodec implements ClientInterface
 {
+    protected $manager;
+
     protected $factory;
 
     protected $logger;
-    
+
     protected $zlib;
 
-    public function __construct(ResponseFactoryInterface $factory, ?LoggerInterface $logger = null)
+    public function __construct(ConnectionManager $manager, ResponseFactoryInterface $factory, ?LoggerInterface $logger = null)
     {
+        $this->manager = $manager;
         $this->factory = $factory;
-        $this->logger = $logger;
-        
+        $this->logger = $logger ?? new NullLogger();
+
         $this->zlib = \function_exists('inflate_init');
     }
-    
+
     /**
      * {@inheritdoc}
      */
@@ -54,36 +57,26 @@ class HttpClient extends HttpCodec implements ClientInterface
             $host = \substr($host, 0, $i);
         }
 
-        if ($encrypted) {
-            $encryption = new ClientEncryption();
-        } else {
-            $encryption = null;
-        }
-
-        $socket = TcpSocket::connect($host, $port, $encryption);
+        $conn = $this->manager->checkout($host, $port, $encrypted);
 
         try {
-            if ($encryption) {
-                $socket->encrypt();
-            }
-
             if ($this->zlib) {
                 $request = $request->withAddedHeader('Accept-Encoding', 'gzip, deflate');
             }
-            
-            $this->writeRequest($socket, $request);
-            
-            $socket->setNodelay(false);
 
-            return $this->readResponse($socket, $request);
+            $this->writeRequest($conn, $request);
+
+            $conn->socket->setNodelay(false);
         } catch (\Throwable $e) {
-            $socket->close($e);
+            $this->manager->release($conn, $e);
 
             throw $e;
         }
+
+        return $this->readResponse($conn, $request);
     }
 
-    protected function writeRequest(TcpSocket $socket, RequestInterface $request): void
+    protected function writeRequest(Connection $conn, RequestInterface $request): void
     {
         static $remove = [
             'Content-Length',
@@ -93,7 +86,7 @@ class HttpClient extends HttpCodec implements ClientInterface
             'Trailer',
             'Transfer-Encoding'
         ];
-        
+
         foreach ($remove as $name) {
             $request = $request->withoutHeader($name);
         }
@@ -106,51 +99,51 @@ class HttpClient extends HttpCodec implements ClientInterface
             }
 
             if ($body->eof()) {
-                $this->writeHeader($socket, $request, '', true, 0, true);
+                $this->writeHeader($conn->socket, $request, '', false, 0, true);
                 return;
             }
-            
+
             $chunk = '';
             $eof = false;
             $i = 0;
-            
+
             while (!$eof && ($i = \strlen($chunk)) < 0x8000) {
                 $chunk .= $body->read(0x8000 - $i);
                 $eof = $body->eof();
             }
 
             if ($eof) {
-                $this->writeHeader($socket, $request, $chunk, true, \strlen($chunk), true);
+                $this->writeHeader($conn->socket, $request, $chunk, false, \strlen($chunk), true);
                 return;
             }
 
             if ($request->getProtocolVersion() == '1.0') {
                 $chunk .= $body->getContents();
 
-                $this->writeHeader($socket, $request, $chunk, true, \strlen($chunk), true);
+                $this->writeHeader($conn->socket, $request, $chunk, false, \strlen($chunk), true);
                 return;
             }
-            
-            $this->writeHeader($socket, $request, \sprintf("%x\r\n%s\r\n", \strlen($chunk), $chunk), true, -1);
-            
+
+            $this->writeHeader($conn->socket, $request, \sprintf("%x\r\n%s\r\n", \strlen($chunk), $chunk), false, -1);
+
             do {
                 $chunk = $body->read(0xFFFF);
-                
+
                 if ($eof = $body->eof()) {
                     $chunk = \sprintf("%x\r\n%s\r\n0\r\n\r\n", \strlen($chunk), $chunk);
-                    
-                    $socket->setNodelay(true);
+
+                    $conn->socket->setNodelay(true);
                 } else {
                     $chunk = \sprintf("%x\r\n%s\r\n", \strlen($chunk), $chunk);
                 }
-                
-                $socket->write($chunk);
+
+                $conn->socket->write($chunk);
             } while (!$eof);
         } finally {
             $body->close();
         }
     }
-    
+
     protected function writeHeader(TcpSocket $socket, RequestInterface $request, string $contents, bool $close, int $len, bool $nodelay = false): void
     {
         if ($close) {
@@ -176,40 +169,57 @@ class HttpClient extends HttpCodec implements ClientInterface
         }
 
         $socket->write($buffer . "\r\n" . $contents);
-        
+
         if ($nodelay) {
             $socket->setNodelay(true);
         }
     }
 
-    protected function readResponse(TcpSocket $socket, RequestInterface $request): ResponseInterface
+    protected function readResponse(Connection $conn, RequestInterface $request): ResponseInterface
     {
-        $buffer = '';
+        try {
+            $buffer = '';
 
-        while (false === ($pos = \strpos($buffer, "\r\n\r\n"))) {
-            $chunk = $socket->read();
+            while (false === ($pos = \strpos($buffer, "\r\n\r\n"))) {
+                $chunk = $conn->socket->read();
 
-            if ($chunk === null) {
-                throw new \RuntimeException('Failed to read next HTTP request');
+                if ($chunk === null) {
+                    throw new \RuntimeException('Failed to read next HTTP request');
+                }
+
+                $buffer .= $chunk;
             }
 
-            $buffer .= $chunk;
+            $header = \substr($buffer, 0, $pos + 2);
+            $buffer = \substr($buffer, $pos + 4);
+
+            $pos = \strpos($header, "\n");
+            $line = \substr($header, 0, $pos);
+            $m = null;
+
+            if (!\preg_match("'^\s*HTTP/(1\\.[01])\s+([1-5][0-9]{2})\s*(.*)$'is", $line, $m)) {
+                throw new \RuntimeException('Invalid HTTP response line received');
+            }
+
+            $response = $this->factory->createResponse((int) $m[2], \trim($m[3]));
+            $response = $response->withProtocolVersion($m[1]);
+            $response = $this->populateHeaders($response, \substr($header, $pos + 1));
+
+            if ($response->getProtocolVersion() == '1.0') {
+                if ('keep-alive' !== \strtolower($response->getHeaderLine('Connection'))) {
+                    $conn->maxRequests = 1;
+                }
+            } else {
+                if ('close' === \strtolower($response->getHeaderLine('Connection'))) {
+                    $conn->maxRequests = 1;
+                }
+            }
+        } catch (\Throwable $e) {
+            $this->manager->release($conn, $e);
+
+            throw $e;
         }
 
-        $header = \substr($buffer, 0, $pos + 2);
-        $buffer = \substr($buffer, $pos + 4);
-
-        $pos = \strpos($header, "\n");
-        $line = \substr($header, 0, $pos);
-        $m = null;
-        if (!\preg_match("'^\s*HTTP/(1\\.[01])\s+([1-5][0-9]{2})\s*(.*)$'is", $line, $m)) {
-            throw new \RuntimeException('Invalid HTTP response line received');
-        }
-        
-        $response = $this->factory->createResponse((int) $m[2], \trim($m[3]));
-        $response = $response->withProtocolVersion($m[1]);
-        $response = $this->populateHeaders($response, \substr($header, $pos + 1));
-        
-        return $this->decodeBody($socket, $response, $buffer, true);
+        return $this->decodeBody(new ClientStream($this->manager, $conn), $response, $buffer, true);
     }
 }
