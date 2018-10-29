@@ -66,7 +66,7 @@ class ClientStream implements ReadableStream
         }
 
         if ($this->conn->buffer === '') {
-            $chunk = $this->conn->socket->read($length ?? 8192);
+            $chunk = $this->conn->socket->read();
 
             if ($chunk === null) {
                 $this->conn = $this->manager->checkin($this->conn);
@@ -77,7 +77,7 @@ class ClientStream implements ReadableStream
             $this->conn->buffer = $chunk;
         }
 
-        $chunk = \substr($this->conn->buffer, 0, $length ?? 8192);
+        $chunk = \substr($this->conn->buffer, 0, $length ?? 0xFFFF);
         $this->conn->buffer = \substr($this->conn->buffer, \strlen($chunk));
 
         return $chunk;

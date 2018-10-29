@@ -79,14 +79,10 @@ class HttpServer extends HttpCodec
 
                 $this->sendResponse($socket, $request, $response, $close);
             } while (!$close);
-        } catch (\Exception $e) {
-            if ($this->logger) {
-                $this->logger->error(\sprintf('%s: %s', \get_class($e), $e->getMessage()), [
-                    'exception' => $e
-                ]);
-            } else {
-                \fwrite(STDERR, "$e\n\n");
-            }
+        } catch (\Throwable $e) {
+            $this->logger->error(\sprintf('%s: %s', \get_class($e), $e->getMessage()), [
+                'exception' => $e
+            ]);
 
             throw $e;
         } finally {
@@ -127,10 +123,17 @@ class HttpServer extends HttpCodec
         if (!\preg_match("'^\s*(\S+)\s+(\S+)\s+HTTP/(1\\.[01])\s*$'is", $line, $m)) {
             throw new \RuntimeException('Invalid HTTP request line received');
         }
-
+        
         $request = $this->factory->createServerRequest($m[1], $m[2]);
         $request = $request->withProtocolVersion($m[3]);
         $request = $this->populateHeaders($request, \substr($header, $pos + 1));
+
+        if (false !== ($i = \strpos($m[2], '?'))) {
+            $query = null;
+            \parse_str(\substr($m[2], $i + 1), $query);
+
+            $request = $request->withQueryParams((array) $query);
+        }
 
         return $this->decodeBody($socket, $request, $buffer);
     }
