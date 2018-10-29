@@ -65,11 +65,20 @@ class ClientStream implements ReadableStream
             return null;
         }
 
-        $chunk = $this->conn->socket->read($length ?? 8192);
+        if ($this->conn->buffer === '') {
+            $chunk = $this->conn->socket->read($length ?? 8192);
 
-        if ($chunk === null) {
-            $this->conn = $this->manager->checkin($this->conn);
+            if ($chunk === null) {
+                $this->conn = $this->manager->checkin($this->conn);
+
+                return null;
+            }
+
+            $this->conn->buffer = $chunk;
         }
+
+        $chunk = \substr($this->conn->buffer, 0, $length ?? 8192);
+        $this->conn->buffer = \substr($this->conn->buffer, \strlen($chunk));
 
         return $chunk;
     }

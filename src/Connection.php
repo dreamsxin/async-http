@@ -28,6 +28,8 @@ class Connection
     public $maxRequests = 0;
     
     public $time;
+    
+    public $buffer = '';
 
     public function __construct(string $key, TcpSocket $socket)
     {

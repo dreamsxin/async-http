@@ -178,20 +178,18 @@ class HttpClient extends HttpCodec implements ClientInterface
     protected function readResponse(Connection $conn, RequestInterface $request): ResponseInterface
     {
         try {
-            $buffer = '';
-
-            while (false === ($pos = \strpos($buffer, "\r\n\r\n"))) {
+            while (false === ($pos = \strpos($conn->buffer, "\r\n\r\n"))) {
                 $chunk = $conn->socket->read();
 
                 if ($chunk === null) {
                     throw new \RuntimeException('Failed to read next HTTP request');
                 }
 
-                $buffer .= $chunk;
+                $conn->buffer .= $chunk;
             }
 
-            $header = \substr($buffer, 0, $pos + 2);
-            $buffer = \substr($buffer, $pos + 4);
+            $header = \substr($conn->buffer, 0, $pos + 2);
+            $conn->buffer = \substr($conn->buffer, $pos + 4);
 
             $pos = \strpos($header, "\n");
             $line = \substr($header, 0, $pos);
@@ -220,6 +218,6 @@ class HttpClient extends HttpCodec implements ClientInterface
             throw $e;
         }
 
-        return $this->decodeBody(new ClientStream($this->manager, $conn), $response, $buffer, true);
+        return $this->decodeBody(new ClientStream($this->manager, $conn), $response, $conn->buffer, true);
     }
 }
