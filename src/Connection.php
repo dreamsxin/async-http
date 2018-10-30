@@ -27,7 +27,7 @@ class Connection
 
     public $maxRequests = 0;
     
-    public $time;
+    public $expires = 0;
     
     public $buffer = '';
 
@@ -38,6 +38,5 @@ class Connection
         $this->id = $counter++;
         $this->key = $key;
         $this->socket = $socket;
-        $this->time = \time();
     }
 }

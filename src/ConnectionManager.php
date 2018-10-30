@@ -13,8 +13,10 @@ declare(strict_types = 1);
 
 namespace Concurrent\Http;
 
+use Concurrent\Context;
 use Concurrent\Deferred;
 use Concurrent\Task;
+use Concurrent\Timer;
 use function Concurrent\gethostbyname;
 use Concurrent\Network\ClientEncryption;
 use Concurrent\Network\TcpSocket;
@@ -29,15 +31,45 @@ class ConnectionManager
 
     protected $connecting = [];
 
+    protected $expires;
+
+    protected $interval;
+
+    protected $lifetime;
+
+    protected $timer;
+
     protected $logger;
-    
-    public function __construct(?LoggerInterface $logger = null)
+
+    /**
+     * Create a new connection manager with limited concurrency and socket lifetime.
+     * 
+     * @param int $lifetime Maximum idle time in seconds.
+     * @param int $interval Garbage collection interval in seconds.
+     * @param LoggerInterface $logger
+     */
+    public function __construct(int $lifetime = 60, int $interval = 5, ?LoggerInterface $logger = null)
     {
+        if ($lifetime < 5) {
+            throw new \InvalidArgumentException(\sprintf('Connection lifetime must not be less than 5 seconds'));
+        }
+
+        if ($interval < 5) {
+            throw new \InvalidArgumentException(\sprintf('Expiry check interval must not be less than 5 seconds'));
+        }
+
+        $this->lifetime = $lifetime;
+        $this->interval = $interval * 1000;
         $this->logger = $logger ?? new NullLogger();
+
+        $this->expires = new \SplPriorityQueue();
+        $this->expires->setExtractFlags(\SplPriorityQueue::EXTR_BOTH);
     }
 
     public function __destruct()
     {
+        $this->close();
+
         $count = 0;
 
         foreach ($this->conns as $conns) {
@@ -60,9 +92,26 @@ class ConnectionManager
             'num' => $count
         ]);
     }
-    
+
+    public function close(?\Throwable $e = null): void
+    {
+        if ($this->timer !== null) {
+            $this->timer->close($e);
+            $this->timer = null;
+        }
+    }
+
     public function checkout(string $host, int $port, bool $encrypted = false): Connection
     {
+        if ($this->timer === null) {
+            $this->timer = new Timer($this->interval);
+
+            Task::asyncWithContext(Context::current()->background(), \Closure::fromCallable([
+                $this,
+                'gc'
+            ]));
+        }
+
         $key = \sprintf('%s|%u|%s', $ip = gethostbyname($host), $port, $encrypted ? $host : '');
 
         do {
@@ -73,6 +122,7 @@ class ConnectionManager
                 ]);
 
                 $conn = \array_shift($this->conns[$key]);
+                $conn->expires = 0;
 
                 break;
             }
@@ -110,8 +160,6 @@ class ConnectionManager
 
             return;
         }
-        
-        $conn->time = \time();
 
         list ($ip, $port) = \explode('|', $conn->key);
 
@@ -122,6 +170,9 @@ class ConnectionManager
 
         if (empty($this->connecting[$conn->key])) {
             $this->conns[$conn->key][] = $conn;
+
+            $conn->expires = \time() + $this->lifetime;
+            $this->expires->insert($conn, -$conn->expires);
         } else {
             $defer = \array_shift($this->connecting[$conn->key]);
 
@@ -142,10 +193,20 @@ class ConnectionManager
             'port' => (int) $port
         ]);
 
+        $conn->expires = 0;
+
         $this->counts[$conn->key]--;
 
         if (empty($this->counts[$conn->key])) {
             unset($this->counts[$conn->key]);
+        }
+
+        if (false !== ($key = \array_search($conn, $this->conns[$conn->key], true))) {
+            unset($this->conns[$conn->key][$key]);
+
+            if (empty($this->conns[$conn->key])) {
+                unset($this->conns[$conn->key]);
+            }
         }
 
         if (!empty($this->connecting[$conn->key])) {
@@ -200,6 +261,44 @@ class ConnectionManager
             }
 
             throw $e;
+        }
+    }
+
+    protected function gc()
+    {
+        while (true) {
+            $this->timer->awaitTimeout();
+
+            $time = \time();
+            $purged = 0;
+
+            while (!$this->expires->isEmpty()) {
+                $entry = $this->expires->top();
+
+                if ($entry['priority'] != -$entry['data']->expires) {
+                    $this->expires->extract();
+
+                    continue;
+                }
+
+                if ($entry['data']->expires < $time) {
+                    $this->expires->extract();
+
+                    $this->release($entry['data']);
+
+                    $purged++;
+
+                    continue;
+                }
+
+                break;
+            }
+
+            if ($purged) {
+                $this->logger->debug('Disposed of {num} expired connections', [
+                    'num' => $purged
+                ]);
+            }
         }
     }
 }
