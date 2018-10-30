@@ -35,6 +35,8 @@ class HttpServer extends HttpCodec
 
     public function __construct(ServerRequestFactoryInterface $factory, TcpServer $server, RequestHandlerInterface $handler, ?LoggerInterface $logger = null)
     {
+        parent::__construct();
+        
         $this->factory = $factory;
         $this->server = $server;
         $this->handler = $handler;

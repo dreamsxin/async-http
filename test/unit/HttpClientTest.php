@@ -87,13 +87,13 @@ class HttpClientTest extends AsyncTestCase
 
     public function testResponseBody()
     {
-        $request = $this->factory->createRequest('GET', 'https://httpbin.org/headers');
+        $request = $this->factory->createRequest('GET', 'https://httpbin.org/gzip');
         $response = $this->client->sendRequest($request);
 
         $this->assertEquals(200, $response->getStatusCode());
 
         $body = \json_decode($response->getBody()->getContents(), true);
-
+        
         $this->assertEquals('httpbin.org', $body['headers']['Host']);
     }
 }

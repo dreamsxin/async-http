@@ -34,8 +34,6 @@ abstract class StreamAdapter implements StreamInterface
     public function close()
     {
         $this->buffer = null;
-        
-        return null;
     }
     
     public function isReadable()

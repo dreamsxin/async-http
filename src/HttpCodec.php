@@ -15,7 +15,6 @@ namespace Concurrent\Http;
 
 use Concurrent\Stream\ReadableStream;
 use Psr\Http\Message\MessageInterface;
-use Psr\Http\Message\StreamInterface;
 
 abstract class HttpCodec
 {
@@ -24,6 +23,13 @@ abstract class HttpCodec
     private const HEADER_REGEX = "(^([^()<>@,;:\\\"/[\]?={}\x01-\x20\x7F]++):[ \t]*+((?:[ \t]*+[\x21-\x7E\x80-\xFF]++)*+)[ \t]*+\r\n)m";
 
     private const HEADER_FOLD_REGEX = "(\r\n[ \t]++)";
+    
+    protected $zlib;
+    
+    public function __construct()
+    {
+        $this->zlib = \function_exists('inflate_init');
+    }
     
     protected function populateHeaders(MessageInterface $message, string $header): MessageInterface
     {
@@ -48,6 +54,8 @@ abstract class HttpCodec
     protected function decodeBody(ReadableStream $stream, MessageInterface $message, string & $buffer): MessageInterface
     {
         if ($message->hasHeader('Content-Length')) {
+            $message = $message->withoutHeader('Transfer-Encoding');
+            
             if (($len = (int) $message->getHeaderLine('Content-Length')) > 0) {
                 $message = $message->withBody(new IteratorStream($this->readLengthDelimitedBody($stream, $len, $buffer)));
             } elseif ($stream instanceof ClientStream) {
@@ -74,19 +82,20 @@ abstract class HttpCodec
             }
         }
 
-        if ('' !== ($encoding = $message->getHeaderLine('Content-Encoding'))) {
-            switch (\strtolower($encoding)) {
+        while ($this->zlib && '' !== ($encoding = \strtolower($message->getHeaderLine('Content-Encoding')))) {
+            switch ($encoding) {
                 case 'gzip':
-                    $message = $message->withBody(new IteratorStream($this->decompressBody($message->getBody(), \ZLIB_ENCODING_GZIP)));
+                    $message = $message->withBody(new InflateStream($message->getBody(), \ZLIB_ENCODING_GZIP));
                     break;
                 case 'deflate':
-                    $message = $message->withBody(new IteratorStream($this->decompressBody($message->getBody(), \ZLIB_ENCODING_DEFLATE)));
+                    $message = $message->withBody(new InflateStream($message->getBody(), \ZLIB_ENCODING_DEFLATE));
                     break;
                 default:
-                    throw new \RuntimeException(\sprintf('Invalid content encoding: "%s"', $encoding));
+                    break 2;
             }
 
             $message = $message->withoutHeader('Content-Encoding');
+            $message = $message->withoutHeader('Content-Length');
         }
 
         return $message;
@@ -177,25 +186,6 @@ abstract class HttpCodec
             }
 
             throw $e;
-        }
-    }
-
-    protected function decompressBody(StreamInterface $body, int $encoding): \Generator
-    {
-        try {
-            $context = \inflate_init($encoding);
-
-            if ($body->isSeekable()) {
-                $body->rewind();
-            }
-
-            while (!$body->eof()) {
-                yield \inflate_add($context, $body->read(4096), \ZLIB_SYNC_FLUSH);
-            }
-
-            yield \inflate_add($context, '', \ZLIB_FINISH);
-        } finally {
-            $body->close();
         }
     }
 }

@@ -29,15 +29,13 @@ class HttpClient extends HttpCodec implements ClientInterface
 
     protected $logger;
 
-    protected $zlib;
-
     public function __construct(ConnectionManager $manager, ResponseFactoryInterface $factory, ?LoggerInterface $logger = null)
     {
+        parent::__construct();
+        
         $this->manager = $manager;
         $this->factory = $factory;
         $this->logger = $logger ?? new NullLogger();
-
-        $this->zlib = \function_exists('inflate_init');
     }
 
     /**
