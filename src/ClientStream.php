@@ -21,15 +21,18 @@ class ClientStream implements ReadableStream
     
     protected $manager;
     
-    public function __construct(ConnectionManager $manager, Connection $conn)
+    protected $managed;    
+    
+    public function __construct(ConnectionManager $manager, Connection $conn, bool $managed = true)
     {
         $this->manager = $manager;
         $this->conn = $conn;
+        $this->managed = $managed;
     }
 
     public function __destruct()
     {
-        if ($this->conn !== null) {
+        if ($this->conn !== null && $this->managed) {
             $this->manager->release($this->conn);
         }
     }
@@ -40,11 +43,15 @@ class ClientStream implements ReadableStream
             $this->conn->maxRequests = 1;
         }
     }
-    
+
     public function release(): void
     {
         if ($this->conn !== null) {
-            $this->conn = $this->manager->checkin($this->conn);
+            if ($this->managed) {
+                $this->conn = $this->manager->checkin($this->conn);
+            } else {
+                $this->conn = null;
+            }
         }
     }
     
@@ -53,7 +60,11 @@ class ClientStream implements ReadableStream
      */
     public function close(?\Throwable $e = null): void
     {
-        $this->conn = $this->manager->release($this->conn, $e);
+        if ($this->managed) {
+            $this->conn = $this->manager->release($this->conn, $e);
+        } else {
+            $this->conn = null;
+        }
     }
 
     /**
@@ -69,7 +80,7 @@ class ClientStream implements ReadableStream
             $chunk = $this->conn->socket->read();
 
             if ($chunk === null) {
-                $this->conn = $this->manager->checkin($this->conn);
+                $this->release();
 
                 return null;
             }

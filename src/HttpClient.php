@@ -13,6 +13,7 @@ declare(strict_types = 1);
 
 namespace Concurrent\Http;
 
+use Concurrent\Network\ClientEncryption;
 use Concurrent\Network\TcpSocket;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
@@ -56,7 +57,7 @@ class HttpClient extends HttpCodec implements ClientInterface
         $conn = $this->manager->checkout($host, $port, $encrypted);
 
         try {
-            $this->writeRequest($conn, $request);
+            $this->writeRequest($conn->socket, $request);
 
             $conn->socket->setNodelay(false);
         } catch (\Throwable $e) {
@@ -68,9 +69,51 @@ class HttpClient extends HttpCodec implements ClientInterface
         return $this->readResponse($conn, $request);
     }
 
-    protected function writeRequest(Connection $conn, RequestInterface $request): void
+    public function upgrade(RequestInterface $request): UpgradeStream
+    {
+        $uri = $request->getUri();
+
+        $encrypted = ($uri->getScheme() == 'https') ? true : false;
+        $host = $uri->getHost();
+
+        if (false === ($i = \strrpos($host, ':'))) {
+            $port = $encrypted ? 443 : 80;
+        } else {
+            $port = (int) \substr($host, $i + 1);
+            $host = \substr($host, 0, $i);
+        }
+
+        if ($encrypted) {
+            $tls = new ClientEncryption();
+        } else {
+            $tls = null;
+        }
+
+        $socket = TcpSocket::connect($host, $port, $tls);
+
+        try {
+            if ($tls) {
+                $socket->encrypt();
+            }
+
+            $this->writeRequest($socket, $request, true);
+
+            $socket->setNodelay(true);
+
+            $response = $this->readResponse($conn = new Connection('#', $socket), $request, true);
+        } catch (\Throwable $e) {
+            $socket->close($e);
+
+            throw $e;
+        }
+
+        return new UpgradeStream($request, $response, $socket, $conn->buffer);
+    }
+
+    protected function writeRequest(TcpSocket $socket, RequestInterface $request, bool $upgrade = false): void
     {
         static $remove = [
+            'Connection',
             'Content-Length',
             'Expect',
             'Keep-Alive',
@@ -83,6 +126,10 @@ class HttpClient extends HttpCodec implements ClientInterface
             $request = $request->withoutHeader($name);
         }
 
+        if ($upgrade) {
+            $request = $request->withHeader('Connection', 'upgrade');
+        }
+
         $body = $request->getBody();
 
         try {
@@ -91,7 +138,7 @@ class HttpClient extends HttpCodec implements ClientInterface
             }
 
             if ($body->eof()) {
-                $this->writeHeader($conn->socket, $request, '', false, 0, true);
+                $this->writeHeader($socket, $request, '', false, 0, true);
                 return;
             }
 
@@ -105,18 +152,18 @@ class HttpClient extends HttpCodec implements ClientInterface
             }
 
             if ($eof) {
-                $this->writeHeader($conn->socket, $request, $chunk, false, \strlen($chunk), true);
+                $this->writeHeader($socket, $request, $chunk, false, \strlen($chunk), true);
                 return;
             }
 
             if ($request->getProtocolVersion() == '1.0') {
                 $chunk .= $body->getContents();
 
-                $this->writeHeader($conn->socket, $request, $chunk, false, \strlen($chunk), true);
+                $this->writeHeader($socket, $request, $chunk, false, \strlen($chunk), true);
                 return;
             }
 
-            $this->writeHeader($conn->socket, $request, \sprintf("%x\r\n%s\r\n", \strlen($chunk), $chunk), false, -1);
+            $this->writeHeader($socket, $request, \sprintf("%x\r\n%s\r\n", \strlen($chunk), $chunk), false, -1);
 
             do {
                 $chunk = $body->read(0xFFFF);
@@ -124,12 +171,12 @@ class HttpClient extends HttpCodec implements ClientInterface
                 if ($eof = $body->eof()) {
                     $chunk = \sprintf("%x\r\n%s\r\n0\r\n\r\n", \strlen($chunk), $chunk);
 
-                    $conn->socket->setNodelay(true);
+                    $socket->setNodelay(true);
                 } else {
                     $chunk = \sprintf("%x\r\n%s\r\n", \strlen($chunk), $chunk);
                 }
 
-                $conn->socket->write($chunk);
+                $socket->write($chunk);
             } while (!$eof);
         } finally {
             $body->close();
@@ -138,10 +185,12 @@ class HttpClient extends HttpCodec implements ClientInterface
 
     protected function writeHeader(TcpSocket $socket, RequestInterface $request, string $contents, bool $close, int $len, bool $nodelay = false): void
     {
-        if ($close) {
-            $request = $request->withHeader('Connection', 'close');
-        } else {
-            $request = $request->withHeader('Connection', 'keep-alive');
+        if (!$request->hasHeader('Connection')) {
+            if ($close) {
+                $request = $request->withHeader('Connection', 'close');
+            } else {
+                $request = $request->withHeader('Connection', 'keep-alive');
+            }
         }
 
         if ($len < 0) {
@@ -167,7 +216,7 @@ class HttpClient extends HttpCodec implements ClientInterface
         }
     }
 
-    protected function readResponse(Connection $conn, RequestInterface $request): ResponseInterface
+    protected function readResponse(Connection $conn, RequestInterface $request, bool $upgrade = false): ResponseInterface
     {
         try {
             while (false === ($pos = \strpos($conn->buffer, "\r\n\r\n"))) {
@@ -195,21 +244,29 @@ class HttpClient extends HttpCodec implements ClientInterface
             $response = $response->withProtocolVersion($m[1]);
             $response = $this->populateHeaders($response, \substr($header, $pos + 1));
 
+            $tokens = \array_fill_keys(\array_map('strtolower', \preg_split("'\s*,\s*'", $response->getHeaderLine('Connection'))), true);
+
             if ($response->getProtocolVersion() == '1.0') {
-                if ('keep-alive' !== \strtolower($response->getHeaderLine('Connection'))) {
+                if (isset($tokens['close']) || empty($tokens['keep-alive'])) {
                     $conn->maxRequests = 1;
                 }
             } else {
-                if ('close' === \strtolower($response->getHeaderLine('Connection'))) {
+                if (isset($tokens['close'])) {
                     $conn->maxRequests = 1;
                 }
             }
+
+            if ($upgrade && empty($tokens['upgrade'])) {
+                throw new \RuntimeException('Missing upgrade in connection header');
+            }
         } catch (\Throwable $e) {
-            $this->manager->release($conn, $e);
+            if (!$upgrade) {
+                $this->manager->release($conn, $e);
+            }
 
             throw $e;
         }
 
-        return $this->decodeBody(new ClientStream($this->manager, $conn), $response, $conn->buffer, true);
+        return $this->decodeBody(new ClientStream($this->manager, $conn, !$upgrade), $response, $conn->buffer);
     }
 }

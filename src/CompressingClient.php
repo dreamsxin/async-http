@@ -43,15 +43,22 @@ class CompressingClient implements ClientInterface
         while ($this->enabled && '' !== ($encoding = \strtolower($response->getHeaderLine('Content-Encoding')))) {
             switch ($encoding) {
                 case 'gzip':
-                    $response = $response->withBody(new InflateStream($response->getBody(), \ZLIB_ENCODING_GZIP));
+                    $encoding = \ZLIB_ENCODING_GZIP;
                     break;
                 case 'deflate':
-                    $response = $response->withBody(new InflateStream($response->getBody(), \ZLIB_ENCODING_DEFLATE));
+                    $encoding = \ZLIB_ENCODING_DEFLATE;
                     break;
                 default:
                     break 2;
             }
 
+            $body = $response->getBody();
+
+            if ($body->isSeekable()) {
+                $body->rewind();
+            }
+
+            $response = $response->withBody(new InflateStream($body, $encoding));
             $response = $response->withoutHeader('Content-Encoding');
             $response = $response->withoutHeader('Content-Length');
 
