@@ -24,13 +24,6 @@ abstract class HttpCodec
 
     private const HEADER_FOLD_REGEX = "(\r\n[ \t]++)";
     
-    protected $zlib;
-    
-    public function __construct()
-    {
-        $this->zlib = \function_exists('inflate_init');
-    }
-    
     protected function populateHeaders(MessageInterface $message, string $header): MessageInterface
     {
         $m = null;
@@ -70,32 +63,16 @@ abstract class HttpCodec
                     $stream->release();
                 } else {
                     $stream->markDisposed();
-                    $message = $message->withBody($stream);
+                    $message = $message->withBody(new AsyncStream($stream));
                 }
             } else {
                 if ('close' === \strtolower($message->getHeaderLine('Connection'))) {
                     $stream->markDisposed();
-                    $message = $message->withBody($stream);
+                    $message = $message->withBody(new AsyncStream($stream));
                 } else {
                     $stream->release();
                 }
             }
-        }
-
-        while ($this->zlib && '' !== ($encoding = \strtolower($message->getHeaderLine('Content-Encoding')))) {
-            switch ($encoding) {
-                case 'gzip':
-                    $message = $message->withBody(new InflateStream($message->getBody(), \ZLIB_ENCODING_GZIP));
-                    break;
-                case 'deflate':
-                    $message = $message->withBody(new InflateStream($message->getBody(), \ZLIB_ENCODING_DEFLATE));
-                    break;
-                default:
-                    break 2;
-            }
-
-            $message = $message->withoutHeader('Content-Encoding');
-            $message = $message->withoutHeader('Content-Length');
         }
 
         return $message;

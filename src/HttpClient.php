@@ -31,8 +31,6 @@ class HttpClient extends HttpCodec implements ClientInterface
 
     public function __construct(ConnectionManager $manager, ResponseFactoryInterface $factory, ?LoggerInterface $logger = null)
     {
-        parent::__construct();
-        
         $this->manager = $manager;
         $this->factory = $factory;
         $this->logger = $logger ?? new NullLogger();
@@ -58,10 +56,6 @@ class HttpClient extends HttpCodec implements ClientInterface
         $conn = $this->manager->checkout($host, $port, $encrypted);
 
         try {
-            if ($this->zlib) {
-                $request = $request->withAddedHeader('Accept-Encoding', 'gzip, deflate');
-            }
-
             $this->writeRequest($conn, $request);
 
             $conn->socket->setNodelay(false);

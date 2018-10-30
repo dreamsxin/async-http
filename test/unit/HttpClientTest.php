@@ -85,15 +85,20 @@ class HttpClientTest extends AsyncTestCase
         ], $responses);
     }
 
+    /**
+     * @requires function inflate_init
+     */
     public function testResponseBody()
     {
+        $client = new CompressingClient($this->client);
+
         $request = $this->factory->createRequest('GET', 'https://httpbin.org/gzip');
-        $response = $this->client->sendRequest($request);
+        $response = $client->sendRequest($request);
 
         $this->assertEquals(200, $response->getStatusCode());
 
         $body = \json_decode($response->getBody()->getContents(), true);
-        
+
         $this->assertEquals('httpbin.org', $body['headers']['Host']);
     }
 }
