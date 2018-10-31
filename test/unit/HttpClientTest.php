@@ -44,7 +44,7 @@ class HttpClientTest extends AsyncTestCase
 
         $this->client = new HttpClient($this->manager, $this->factory, $this->logger);
     }
-    
+
     protected function tearDown()
     {
         $this->manager = null;
@@ -68,14 +68,16 @@ class HttpClientTest extends AsyncTestCase
 
     public function testStatusCodeParallel()
     {
+        $client = new MemoryBufferingClient(new CompressingClient($this->client), $this->factory);
+        
         $requests = [
             'https://httpbin.org/status/201',
             'http://httpbin.org/status/204'
         ];
 
-        $responses = Task::await(all(array_map(function (string $uri) {
-            return Task::async(function () use ($uri) {
-                return $this->client->sendRequest($this->factory->createRequest('GET', $uri))->getStatusCode();
+        $responses = Task::await(all(array_map(function (string $uri) use ($client) {
+            return Task::async(function () use ($uri, $client) {
+                return $client->sendRequest($this->factory->createRequest('GET', $uri))->getStatusCode();
             });
         }, $requests)));
 

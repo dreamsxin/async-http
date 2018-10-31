@@ -17,6 +17,9 @@ use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseInterface;
 
+/**
+ * Adds support for gzip and deflate responce content encoding.
+ */
 class CompressingClient implements ClientInterface
 {
     protected $client;
