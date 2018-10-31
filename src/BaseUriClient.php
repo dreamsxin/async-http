@@ -1,7 +1,7 @@
 <?php
 
 /*
- * This file is part of Async PSR HTTP.
+ * This file is part of Concurrent PHP HTTP.
  *
  * (c) Martin Schröder <m.schroeder2007@gmail.com>
  *

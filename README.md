@@ -1,4 +1,4 @@
-# Async PSR HTTP Client & Server
+# HTTP Client & Server
 
 Provides an HTTP client and server example implementation backed by the `async` PHP extension.
 
@@ -6,11 +6,11 @@ Provides an HTTP client and server example implementation backed by the `async` 
 
 | API | Description |
 | --- | ----------- |
-| `PSR-3` | Provides a simple logger interface, [monolog](https://github.com/Seldaek/monolog) is used for testing. |
-| `PSR-7` | Provides HTTP message abstraction, [Tobias Nyholm PSR7](https://github.com/Nyholm/psr7) is used in examples. |
-| `PSR-15` | Provides contracts for server HTTP request handlers and HTTP middleware. |
-| `PSR-17` | Provides HTTP message factories, your PSR-7 implementations should provide these. |
-| `PSR-18` | Provides a contract for an HTTP client. |
+| [PSR-3](https://www.php-fig.org/psr/psr-3/) | Provides a simple logger interface, [monolog](https://github.com/Seldaek/monolog) is used for testing. |
+| [PSR-7](https://www.php-fig.org/psr/psr-7/) | Provides HTTP message abstraction, [Tobias Nyholm PSR7](https://github.com/Nyholm/psr7) is used in examples. |
+| [PSR-15](https://www.php-fig.org/psr/psr-15/) | Provides contracts for server HTTP request handlers and HTTP middleware. |
+| [PSR-17](https://www.php-fig.org/psr/psr-17/) | Provides HTTP message factories, your PSR-7 implementations should provide these. |
+| [PSR-18](https://www.php-fig.org/psr/psr-18/) | Provides a contract for an HTTP client. |
 
 ## HTTP Client
 
