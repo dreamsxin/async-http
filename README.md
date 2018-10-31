@@ -7,7 +7,7 @@ Provides an HTTP client and server example implementation backed by the `async` 
 | API | Description |
 | --- | ----------- |
 | `PSR-3` | Provides a simple logger interface, [monolog](https://github.com/Seldaek/monolog) is used for testing. |
-| `PSR-7` | Provides HTTP message abstraction, [Tobias Nyholm](https://github.com/Nyholm/psr7) is used in examples. |
+| `PSR-7` | Provides HTTP message abstraction, [Tobias Nyholm PSR7](https://github.com/Nyholm/psr7) is used in examples. |
 | `PSR-15` | Provides contracts for server HTTP request handlers and HTTP middleware. |
 | `PSR-17` | Provides HTTP message factories, your PSR-7 implementations should provide these. |
 | `PSR-18` | Provides a contract for an HTTP client. |
@@ -31,6 +31,10 @@ $response = $client->sendRequest($request);
 
 print_r($response);
 ```
+
+## BaseUriClient
+
+Decorator that enhances a PSR-18 HTTP client with base URI handling to allow for relative paths in request URIs.
 
 ### Compressing Client
 

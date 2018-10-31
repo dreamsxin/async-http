@@ -68,10 +68,12 @@ class HttpClientTest extends AsyncTestCase
 
     public function testStatusCodeParallel()
     {
-        $client = new MemoryBufferingClient(new CompressingClient($this->client), $this->factory);
+        $client = new CompressingClient($this->client);
+        $client = new MemoryBufferingClient($client, $this->factory);
+        $client = new BaseUriClient($client, $this->factory->createUri('https://httpbin.org/status/'));
         
         $requests = [
-            'https://httpbin.org/status/201',
+            '201',
             'http://httpbin.org/status/204'
         ];
 
