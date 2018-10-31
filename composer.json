@@ -14,7 +14,7 @@
 	"require" : {
 		"php" : "~7.2",
 		"concurrent-php/async-api" : "dev-master",
-		"psr/http-client" : "~0.3",
+		"psr/http-client" : "~1.0",
 		"psr/http-server-handler" : "~1.0",
 		"psr/http-factory" : "~1.0",
 		"psr/log" : "~1.0",
