@@ -7,5 +7,4 @@
 composer.lock
 composer.phar
 coverage
-k1.json
 vendor

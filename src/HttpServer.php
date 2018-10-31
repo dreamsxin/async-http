@@ -14,8 +14,10 @@ declare(strict_types = 1);
 namespace Concurrent\Http;
 
 use Concurrent\Task;
+use Concurrent\Network\SocketException;
 use Concurrent\Network\TcpServer;
 use Concurrent\Network\TcpSocket;
+use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestFactoryInterface;
 use Psr\Http\Message\ServerRequestInterface;
@@ -25,20 +27,33 @@ use Psr\Log\NullLogger;
 
 class HttpServer extends HttpCodec
 {
-    protected $factory;
+    protected $request;
+    
+    protected $response;
 
     protected $server;
 
     protected $handler;
 
     protected $logger;
+    
+    protected $upgrades = [];
 
-    public function __construct(ServerRequestFactoryInterface $factory, TcpServer $server, RequestHandlerInterface $handler, ?LoggerInterface $logger = null)
+    public function __construct(ServerRequestFactoryInterface $request, ResponseFactoryInterface $response, TcpServer $server, RequestHandlerInterface $handler, ?LoggerInterface $logger = null)
     {
-        $this->factory = $factory;
+        $this->request = $request;
+        $this->response = $response;
         $this->server = $server;
         $this->handler = $handler;
         $this->logger = $logger ?? new NullLogger();
+    }
+    
+    public function withUpgradeHandler(UpgradeHandler $handler): HttpServer
+    {
+        $server = clone $this;
+        $server->upgrades[$handler->getProtocol()] = $handler;
+
+        return $server;
     }
 
     public function run(): void
@@ -46,7 +61,7 @@ class HttpServer extends HttpCodec
         while (true) {
             try {
                 $socket = $this->server->accept();
-            } catch (\Throwable $e) {
+            } catch (SocketException $e) {
                 continue;
             }
 
@@ -57,7 +72,7 @@ class HttpServer extends HttpCodec
         }
     }
 
-    protected function handleSocket(TcpSocket $socket): void
+    protected function handleSocket(TcpSocket $socket)
     {
         $buffer = '';
 
@@ -69,12 +84,27 @@ class HttpServer extends HttpCodec
                     break;
                 }
 
+                $tokens = \array_fill_keys(\array_map('strtolower', \preg_split("'\s*,\s*'", $request->getHeaderLine('Connection'))), true);
+
+                if (!empty($tokens['upgrade'])) {
+                    $protocol = \strtolower($request->getHeaderLine('Upgrade'));
+
+                    if (isset($this->upgrades[$protocol])) {
+                        return $this->handleUpgrade($this->upgrades[$protocol], $socket, $buffer, $request);
+                    }
+
+                    $this->logger->warning('No upgrade handler found for {protocol}', [
+                        'protocol' => $protocol
+                    ]);
+                }
+
                 $response = $this->handler->handle($request);
+                $response = $response->withoutHeader('Connection');
 
                 if ($request->getProtocolVersion() == '1.0') {
-                    $close = ('keep-alive' !== \strtolower($request->getHeaderLine('Connection')));
+                    $close = empty($tokens['keep-alive']);
                 } else {
-                    $close = ('close' === \strtolower($request->getHeaderLine('Connection')));
+                    $close = !empty($tokens['close']);
                 }
 
                 $this->sendResponse($socket, $request, $response, $close);
@@ -88,6 +118,21 @@ class HttpServer extends HttpCodec
         } finally {
             $socket->close();
         }
+    }
+    
+    protected function handleUpgrade(UpgradeHandler $handler, TcpSocket $socket, string $buffer, ServerRequestInterface $request)
+    {
+        $response = $this->response->createResponse(101);
+        $response = $response->withHeader('Connection', 'upgrade');
+
+        $response = $handler->populateResponse($request, $response);
+        $close = false;
+
+        $socket->setNodelay(true);
+
+        $this->sendResponse($socket, $request, $response, $close);
+
+        $handler->handleConnection(new UpgradeStream($request, $response, $socket, $buffer));
     }
 
     protected function readRequest(TcpSocket $socket, string & $buffer): ?ServerRequestInterface
@@ -124,7 +169,7 @@ class HttpServer extends HttpCodec
             throw new \RuntimeException('Invalid HTTP request line received');
         }
         
-        $request = $this->factory->createServerRequest($m[1], $m[2]);
+        $request = $this->request->createServerRequest($m[1], $m[2]);
         $request = $request->withProtocolVersion($m[3]);
         $request = $this->populateHeaders($request, \substr($header, $pos + 1));
 
@@ -233,10 +278,12 @@ class HttpServer extends HttpCodec
     
     protected function writeHeader(TcpSocket $socket, ResponseInterface $response, string $contents, bool $close, int $len, bool $nodelay = false): void
     {
-        if ($close) {
-            $response = $response->withHeader('Connection', 'close');
-        } else {
-            $response = $response->withHeader('Connection', 'keep-alive');
+        if (!$response->hasHeader('Connection')) {
+            if ($close) {
+                $response = $response->withHeader('Connection', 'close');
+            } else {
+                $response = $response->withHeader('Connection', 'keep-alive');
+            }
         }
         
         if ($len < 0) {

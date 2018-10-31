@@ -16,10 +16,8 @@ use Concurrent\Network\TcpServer;
 use Monolog\Logger;
 use Monolog\Processor\PsrLogMessageProcessor;
 use Nyholm\Psr7\Factory\Psr17Factory;
-use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;
-use Psr\Http\Message\StreamFactoryInterface;
 use Psr\Http\Server\RequestHandlerInterface;
 use Psr\Log\LoggerInterface;
 
@@ -34,18 +32,15 @@ $logger = new Logger('HTTP', [], [
 
 $factory = new Psr17Factory();
 
-$handler = new class($factory, $factory, $logger) implements RequestHandlerInterface {
+$handler = new class($factory, $logger) implements RequestHandlerInterface {
 
     protected $factory;
 
-    protected $stream;
-
     protected $logger;
 
-    public function __construct(ResponseFactoryInterface $factory, StreamFactoryInterface $stream, LoggerInterface $logger)
+    public function __construct(Psr17Factory $factory, LoggerInterface $logger)
     {
         $this->factory = $factory;
-        $this->stream = $stream;
         $this->logger = $logger;
     }
 
@@ -56,15 +51,17 @@ $handler = new class($factory, $factory, $logger) implements RequestHandlerInter
             'target' => $request->getRequestTarget(),
             'version' => $request->getProtocolVersion()
         ]);
+        
+        $path = $request->getUri()->getPath();
 
-        if ($request->getUri()->getPath() == '/favicon.ico') {
+        if ($path == '/favicon.ico') {
             return $this->factory->createResponse(404);
         }
 
         $response = $this->factory->createResponse();
         $response = $response->withHeader('Content-Type', 'application/json');
 
-        return $response->withBody($this->stream->createStream(\json_encode([
+        return $response->withBody($this->factory->createStream(\json_encode([
             'controller' => __FILE__,
             'method' => $request->getMethod(),
             'path' => $request->getUri()->getPath(),
@@ -80,5 +77,5 @@ $logger->info('Server listening on tcp://{address}:{port}', [
     'port' => $tcp->getPort()
 ]);
 
-$server = new HttpServer($factory, $tcp, $handler, $logger);
+$server = new HttpServer($factory, $factory, $tcp, $handler, $logger);
 $server->run();

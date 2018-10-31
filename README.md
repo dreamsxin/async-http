@@ -71,6 +71,6 @@ $handler = new class($factory) implements RequestHandlerInterface {
     }
 };
 
-$server = new HttpServer($factory, TcpServer::listen('127.0.0.1', 8080), $handler);
+$server = new HttpServer($factory, $factory, TcpServer::listen('127.0.0.1', 8080), $handler);
 $server->run();
 ```
