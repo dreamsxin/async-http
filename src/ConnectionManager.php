@@ -262,11 +262,13 @@ class ConnectionManager
             unset($this->counts[$conn->key]);
         }
 
-        if (false !== ($key = \array_search($conn, $this->conns[$conn->key], true))) {
-            unset($this->conns[$conn->key][$key]);
+        if (!empty($this->conns[$conn->key])) {
+            if (false !== ($key = \array_search($conn, $this->conns[$conn->key], true))) {
+                unset($this->conns[$conn->key][$key]);
 
-            if (empty($this->conns[$conn->key])) {
-                unset($this->conns[$conn->key]);
+                if (empty($this->conns[$conn->key])) {
+                    unset($this->conns[$conn->key]);
+                }
             }
         }
 
