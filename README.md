@@ -32,7 +32,7 @@ $response = $client->sendRequest($request);
 print_r($response);
 ```
 
-## BaseUriClient
+### BaseUriClient
 
 Decorator that enhances a PSR-18 HTTP client with base URI handling to allow for relative paths in request URIs.
 

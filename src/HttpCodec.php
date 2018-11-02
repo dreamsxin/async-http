@@ -13,6 +13,8 @@ declare(strict_types = 1);
 
 namespace Concurrent\Http;
 
+use Concurrent\Network\TcpSocket;
+use Concurrent\Stream\DuplexStream;
 use Concurrent\Stream\ReadableStream;
 use Psr\Http\Message\MessageInterface;
 
@@ -23,6 +25,13 @@ abstract class HttpCodec
     private const HEADER_REGEX = "(^([^()<>@,;:\\\"/[\]?={}\x01-\x20\x7F]++):[ \t]*+((?:[ \t]*+[\x21-\x7E\x80-\xFF]++)*+)[ \t]*+\r\n)m";
 
     private const HEADER_FOLD_REGEX = "(\r\n[ \t]++)";
+    
+    protected function nodelay(DuplexStream $socket, bool $flag): void
+    {
+        if ($socket instanceof TcpSocket) {
+            $socket->setNodelay($flag);
+        }
+    }
     
     protected function populateHeaders(MessageInterface $message, string $header): MessageInterface
     {

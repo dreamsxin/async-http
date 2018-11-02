@@ -13,7 +13,7 @@ declare(strict_types = 1);
 
 namespace Concurrent\Http;
 
-use Concurrent\Network\TcpSocket;
+use Concurrent\Stream\DuplexStream;
 
 class Connection
 {
@@ -31,7 +31,7 @@ class Connection
     
     public $buffer = '';
 
-    public function __construct(string $key, TcpSocket $socket)
+    public function __construct(string $key, DuplexStream $socket)
     {
         static $counter = 'a';
 

@@ -16,7 +16,7 @@ namespace Concurrent\Http;
 use Concurrent\Task;
 use Concurrent\Network\SocketException;
 use Concurrent\Network\TcpServer;
-use Concurrent\Network\TcpSocket;
+use Concurrent\Stream\DuplexStream;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestFactoryInterface;
@@ -72,13 +72,13 @@ class HttpServer extends HttpCodec
         }
     }
 
-    protected function handleSocket(TcpSocket $socket)
+    protected function handleSocket(DuplexStream $socket)
     {
         $buffer = '';
 
         try {
             do {
-                $socket->setNodelay(false);
+                $this->nodelay($socket, false);
 
                 if (null === ($request = $this->readRequest($socket, $buffer))) {
                     break;
@@ -120,7 +120,7 @@ class HttpServer extends HttpCodec
         }
     }
     
-    protected function handleUpgrade(UpgradeHandler $handler, TcpSocket $socket, string $buffer, ServerRequestInterface $request)
+    protected function handleUpgrade(UpgradeHandler $handler, DuplexStream $socket, string $buffer, ServerRequestInterface $request)
     {
         $response = $this->response->createResponse(101);
         $response = $response->withHeader('Connection', 'upgrade');
@@ -128,14 +128,14 @@ class HttpServer extends HttpCodec
         $response = $handler->populateResponse($request, $response);
         $close = false;
 
-        $socket->setNodelay(true);
+        $this->nodelay($socket, true);
 
         $this->sendResponse($socket, $request, $response, $close);
 
         $handler->handleConnection(new UpgradeStream($request, $response, $socket, $buffer));
     }
 
-    protected function readRequest(TcpSocket $socket, string & $buffer): ?ServerRequestInterface
+    protected function readRequest(DuplexStream $socket, string & $buffer): ?ServerRequestInterface
     {
         $remaining = 0x4000;
 
@@ -203,7 +203,7 @@ class HttpServer extends HttpCodec
         return $response;
     }
 
-    protected function sendResponse(TcpSocket $socket, ServerRequestInterface $request, ResponseInterface $response, bool & $close): void
+    protected function sendResponse(DuplexStream $socket, ServerRequestInterface $request, ResponseInterface $response, bool & $close): void
     {
         $body = $request->getBody();
 
@@ -263,7 +263,7 @@ class HttpServer extends HttpCodec
                     $chunk = \sprintf("%x\r\n%s\r\n0\r\n\r\n", \strlen($chunk), $chunk);
                     
                     if (!$close) {
-                        $socket->setNodelay(true);
+                        $this->nodelay($socket, true);
                     }
                 } else {
                     $chunk = \sprintf("%x\r\n%s\r\n", \strlen($chunk), $chunk);
@@ -276,7 +276,7 @@ class HttpServer extends HttpCodec
         }
     }
     
-    protected function writeHeader(TcpSocket $socket, ResponseInterface $response, string $contents, bool $close, int $len, bool $nodelay = false): void
+    protected function writeHeader(DuplexStream $socket, ResponseInterface $response, string $contents, bool $close, int $len, bool $nodelay = false): void
     {
         if (!$response->hasHeader('Connection')) {
             if ($close) {
@@ -307,7 +307,7 @@ class HttpServer extends HttpCodec
         $socket->write($buffer . "\r\n" . $contents);
         
         if ($nodelay) {
-            $socket->setNodelay(true);
+            $this->nodelay($socket, true);
         }
     }
 }

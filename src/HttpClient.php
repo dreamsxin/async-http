@@ -13,8 +13,7 @@ declare(strict_types = 1);
 
 namespace Concurrent\Http;
 
-use Concurrent\Network\ClientEncryption;
-use Concurrent\Network\TcpSocket;
+use Concurrent\Stream\DuplexStream;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
@@ -59,7 +58,7 @@ class HttpClient extends HttpCodec implements ClientInterface
         try {
             $this->writeRequest($conn->socket, $request);
 
-            $conn->socket->setNodelay(false);
+            $this->nodelay($conn->socket, false);
         } catch (\Throwable $e) {
             $this->manager->release($conn, $e);
 
@@ -83,34 +82,26 @@ class HttpClient extends HttpCodec implements ClientInterface
             $host = \substr($host, 0, $i);
         }
 
-        if ($encrypted) {
-            $tls = new ClientEncryption();
-        } else {
-            $tls = null;
-        }
-
-        $socket = TcpSocket::connect($host, $port, $tls);
+        $conn = $this->manager->checkout($host, $port, $encrypted);
 
         try {
-            if ($tls) {
-                $socket->encrypt();
-            }
+            $this->manager->detach($conn);
 
-            $this->writeRequest($socket, $request, true);
+            $this->writeRequest($conn->socket, $request, true);
 
-            $socket->setNodelay(true);
+            $this->nodelay($conn->socket, true);
 
-            $response = $this->readResponse($conn = new Connection('#', $socket), $request, true);
+            $response = $this->readResponse($conn, $request, true);
         } catch (\Throwable $e) {
-            $socket->close($e);
+            $conn->socket->close($e);
 
             throw $e;
         }
 
-        return new UpgradeStream($request, $response, $socket, $conn->buffer);
+        return new UpgradeStream($request, $response, $conn->socket, $conn->buffer);
     }
 
-    protected function writeRequest(TcpSocket $socket, RequestInterface $request, bool $upgrade = false): void
+    protected function writeRequest(DuplexStream $socket, RequestInterface $request, bool $upgrade = false): void
     {
         static $remove = [
             'Connection',
@@ -171,7 +162,7 @@ class HttpClient extends HttpCodec implements ClientInterface
                 if ($eof = $body->eof()) {
                     $chunk = \sprintf("%x\r\n%s\r\n0\r\n\r\n", \strlen($chunk), $chunk);
 
-                    $socket->setNodelay(true);
+                    $this->nodelay($socket, true);
                 } else {
                     $chunk = \sprintf("%x\r\n%s\r\n", \strlen($chunk), $chunk);
                 }
@@ -183,7 +174,7 @@ class HttpClient extends HttpCodec implements ClientInterface
         }
     }
 
-    protected function writeHeader(TcpSocket $socket, RequestInterface $request, string $contents, bool $close, int $len, bool $nodelay = false): void
+    protected function writeHeader(DuplexStream $socket, RequestInterface $request, string $contents, bool $close, int $len, bool $nodelay = false): void
     {
         if (!$request->hasHeader('Connection')) {
             if ($close) {
@@ -208,11 +199,11 @@ class HttpClient extends HttpCodec implements ClientInterface
                 $buffer .= \sprintf("%s: %s\r\n", $k, $v);
             }
         }
-
+        
         $socket->write($buffer . "\r\n" . $contents);
 
         if ($nodelay) {
-            $socket->setNodelay(true);
+            $this->nodelay($socket, true);
         }
     }
 

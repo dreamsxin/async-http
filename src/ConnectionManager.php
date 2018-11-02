@@ -184,6 +184,18 @@ class ConnectionManager
         }
     }
 
+    public function detach(Connection $conn): void
+    {
+        list ($ip, $port) = \explode('|', $conn->key);
+
+        $this->logger->debug('Detach connection tcp://{ip}:{port}', [
+            'ip' => $ip,
+            'port' => (int) $port
+        ]);
+
+        $this->dispose($conn);
+    }
+
     public function release(Connection $conn, ?\Throwable $e = null): void
     {
         list ($ip, $port) = \explode('|', $conn->key);
@@ -193,31 +205,7 @@ class ConnectionManager
             'port' => (int) $port
         ]);
 
-        $conn->expires = 0;
-
-        $this->counts[$conn->key]--;
-
-        if (empty($this->counts[$conn->key])) {
-            unset($this->counts[$conn->key]);
-        }
-
-        if (false !== ($key = \array_search($conn, $this->conns[$conn->key], true))) {
-            unset($this->conns[$conn->key][$key]);
-
-            if (empty($this->conns[$conn->key])) {
-                unset($this->conns[$conn->key]);
-            }
-        }
-
-        if (!empty($this->connecting[$conn->key])) {
-            $defer = \array_shift($this->connecting[$conn->key]);
-
-            if (empty($this->connecting[$conn->key])) {
-                unset($this->connecting[$conn->key]);
-            }
-
-            $defer->resolve();
-        }
+        $this->dispose($conn);
 
         $conn->socket->close($e);
     }
@@ -261,6 +249,35 @@ class ConnectionManager
             }
 
             throw $e;
+        }
+    }
+
+    protected function dispose(Connection $conn): void
+    {
+        $conn->expires = 0;
+
+        $this->counts[$conn->key]--;
+
+        if (empty($this->counts[$conn->key])) {
+            unset($this->counts[$conn->key]);
+        }
+
+        if (false !== ($key = \array_search($conn, $this->conns[$conn->key], true))) {
+            unset($this->conns[$conn->key][$key]);
+
+            if (empty($this->conns[$conn->key])) {
+                unset($this->conns[$conn->key]);
+            }
+        }
+
+        if (!empty($this->connecting[$conn->key])) {
+            $defer = \array_shift($this->connecting[$conn->key]);
+
+            if (empty($this->connecting[$conn->key])) {
+                unset($this->connecting[$conn->key]);
+            }
+
+            $defer->resolve();
         }
     }
 
