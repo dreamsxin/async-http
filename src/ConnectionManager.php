@@ -18,8 +18,8 @@ use Concurrent\Deferred;
 use Concurrent\Task;
 use Concurrent\Timer;
 use function Concurrent\gethostbyname;
-use Concurrent\Network\ClientEncryption;
 use Concurrent\Network\TcpSocket;
+use Concurrent\Network\TlsClientEncryption;
 use Psr\Log\LoggerInterface;
 use Psr\Log\NullLogger;
 
@@ -222,7 +222,7 @@ class ConnectionManager
             list ($host, $port, $encrypt) = \explode('|', $key);
 
             if ($encrypt !== '') {
-                $tls = new ClientEncryption();
+                $tls = new TlsClientEncryption();
                 $tls = $tls->withPeerName($encrypt);
             } else {
                 $tls = null;

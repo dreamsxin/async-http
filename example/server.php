@@ -73,7 +73,7 @@ $handler = new class($factory, $logger) implements RequestHandlerInterface {
 $tcp = TcpServer::listen('127.0.0.1', 8080);
 
 $logger->info('Server listening on tcp://{address}:{port}', [
-    'address' => $tcp->getHost(),
+    'address' => $tcp->getAddress(),
     'port' => $tcp->getPort()
 ]);
 

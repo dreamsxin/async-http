@@ -13,8 +13,7 @@ declare(strict_types = 1);
 
 namespace Concurrent\Http;
 
-use Concurrent\Network\TcpSocket;
-use Concurrent\Stream\DuplexStream;
+use Concurrent\Network\SocketStream;
 use Concurrent\Stream\ReadableStream;
 use Concurrent\Stream\WritableStream;
 use Psr\Http\Message\RequestInterface;
@@ -26,21 +25,21 @@ class UpgradeStream implements ReadableStream, WritableStream
 
     protected $response;
 
-    protected $stream;
+    protected $socket;
 
     protected $buffer;
 
-    public function __construct(RequestInterface $request, ResponseInterface $response, DuplexStream $stream, string $buffer = '')
+    public function __construct(RequestInterface $request, ResponseInterface $response, SocketStream $socket, string $buffer = '')
     {
         $this->request = $request;
         $this->response = $response;
-        $this->stream = $stream;
+        $this->socket = $socket;
         $this->buffer = $buffer;
     }
 
     public function __destruct()
     {
-        $this->stream->close();
+        $this->socket->close();
     }
     
     public function getProtocol(): string
@@ -52,13 +51,18 @@ class UpgradeStream implements ReadableStream, WritableStream
     {
         return $this->response;
     }
+    
+    public function getSocket(): SocketStream
+    {
+        return $this->socket;
+    }
 
     /**
      * {@inheritdoc}
      */
     public function close(?\Throwable $e = null): void
     {
-        $this->stream->close($e);
+        $this->socket->close($e);
         $this->buffer = '';
     }
 
@@ -68,7 +72,7 @@ class UpgradeStream implements ReadableStream, WritableStream
     public function read(?int $length = null): ?string
     {
         if ($this->buffer === '') {
-            $this->buffer = $this->stream->read();
+            $this->buffer = $this->socket->read();
         }
 
         if ($this->buffer === '') {
@@ -86,20 +90,11 @@ class UpgradeStream implements ReadableStream, WritableStream
      */
     public function write(string $data): void
     {
-        $this->stream->write($data);
+        $this->socket->write($data);
     }
-
-    /**
-     * {@inheritdoc}
-     */
-    public function writeAsync(string $data, ?int $size = null): bool
+    
+    public function writeAsync(string $data): int
     {
-        if ($this->stream instanceof TcpSocket) {
-            return $this->stream->writeAsync($data, $size);
-        }
-
-        $this->stream->write($data);
-
-        return true;
+        return $this->socket->writeAsync($data);
     }
 }

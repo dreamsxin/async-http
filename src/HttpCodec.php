@@ -13,8 +13,6 @@ declare(strict_types = 1);
 
 namespace Concurrent\Http;
 
-use Concurrent\Network\TcpSocket;
-use Concurrent\Stream\DuplexStream;
 use Concurrent\Stream\ReadableStream;
 use Psr\Http\Message\MessageInterface;
 
@@ -25,13 +23,6 @@ abstract class HttpCodec
     private const HEADER_REGEX = "(^([^()<>@,;:\\\"/[\]?={}\x01-\x20\x7F]++):[ \t]*+((?:[ \t]*+[\x21-\x7E\x80-\xFF]++)*+)[ \t]*+\r\n)m";
 
     private const HEADER_FOLD_REGEX = "(\r\n[ \t]++)";
-    
-    protected function nodelay(DuplexStream $socket, bool $flag): void
-    {
-        if ($socket instanceof TcpSocket) {
-            $socket->setNodelay($flag);
-        }
-    }
     
     protected function populateHeaders(MessageInterface $message, string $header): MessageInterface
     {
@@ -87,12 +78,12 @@ abstract class HttpCodec
         return $message;
     }
 
-    protected function readLengthDelimitedBody(ReadableStream $socket, int $len, string & $buffer): \Generator
+    protected function readLengthDelimitedBody(ReadableStream $stream, int $len, string & $buffer): \Generator
     {
         try {
             while ($len > 0) {
                 if ($buffer === '') {
-                    $buffer = $socket->read();
+                    $buffer = $stream->read();
 
                     if ($buffer === null) {
                         throw new \RuntimeException('Unexpected end of HTTP body stream');
@@ -107,24 +98,24 @@ abstract class HttpCodec
                 yield $chunk;
             }
 
-            if ($socket instanceof ClientStream) {
-                $socket->release();
+            if ($stream instanceof ClientStream) {
+                $stream->release();
             }
         } catch (\Throwable $e) {
-            if ($socket instanceof ClientStream) {
-                $socket->close($e);
+            if ($stream instanceof ClientStream) {
+                $stream->close($e);
             }
 
             throw $e;
         }
     }
 
-    protected function readChunkEncodedBody(ReadableStream $socket, string & $buffer): \Generator
+    protected function readChunkEncodedBody(ReadableStream $stream, string & $buffer): \Generator
     {
         try {
             while (true) {
                 while (false === ($pos = \strpos($buffer, "\n"))) {
-                    if (null === ($chunk = $socket->read())) {
+                    if (null === ($chunk = $stream->read())) {
                         throw new \RuntimeException('Unexpected end of HTTP body stream');
                     }
 
@@ -147,7 +138,7 @@ abstract class HttpCodec
 
                 while ($remainder > 0) {
                     if ($buffer === '') {
-                        if (null === ($buffer = $socket->read())) {
+                        if (null === ($buffer = $stream->read())) {
                             throw new \RuntimeException('Unexpected end of HTTP body stream');
                         }
                     }
@@ -163,12 +154,12 @@ abstract class HttpCodec
                 $buffer = \substr($buffer, 2);
             }
 
-            if ($socket instanceof ClientStream) {
-                $socket->release();
+            if ($stream instanceof ClientStream) {
+                $stream->release();
             }
         } catch (\Throwable $e) {
-            if ($socket instanceof ClientStream) {
-                $socket->close($e);
+            if ($stream instanceof ClientStream) {
+                $stream->close($e);
             }
 
             throw $e;
