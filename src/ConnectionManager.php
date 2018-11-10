@@ -17,7 +17,6 @@ use Concurrent\Context;
 use Concurrent\Deferred;
 use Concurrent\Task;
 use Concurrent\Timer;
-use function Concurrent\gethostbyname;
 use Concurrent\Network\TcpSocket;
 use Concurrent\Network\TlsClientEncryption;
 use Psr\Log\LoggerInterface;
@@ -112,7 +111,7 @@ class ConnectionManager
             ]));
         }
 
-        $key = \sprintf('%s|%u|%s', $ip = gethostbyname($host), $port, $encrypted ? $host : '');
+        $key = \sprintf('%s|%u|%s', $ip = \gethostbyname($host), $port, $encrypted ? $host : '');
 
         do {
             if (!empty($this->conns[$key])) {
