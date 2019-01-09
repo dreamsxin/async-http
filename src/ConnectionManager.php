@@ -13,7 +13,6 @@ declare(strict_types = 1);
 
 namespace Concurrent\Http;
 
-use Concurrent\Context;
 use Concurrent\Deferred;
 use Concurrent\Task;
 use Concurrent\Timer;
@@ -105,7 +104,7 @@ class ConnectionManager
         if ($this->timer === null) {
             $this->timer = new Timer($this->interval);
 
-            Task::asyncWithContext(Context::current()->background(), \Closure::fromCallable([
+            Task::background(\Closure::fromCallable([
                 $this,
                 'gc'
             ]));
