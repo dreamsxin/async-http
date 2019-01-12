@@ -13,9 +13,9 @@ declare(strict_types = 1);
 
 namespace Concurrent\Http;
 
-use Concurrent\Task;
+use Concurrent\CancellationException;
+use Concurrent\Context;
 use Concurrent\Network\Server;
-use Concurrent\Network\SocketException;
 use Concurrent\Network\SocketStream;
 use Concurrent\Network\TcpSocket;
 use Psr\Http\Message\ResponseFactoryInterface;
@@ -40,12 +40,10 @@ class HttpServer extends HttpCodec
     
     protected $upgrades = [];
 
-    public function __construct(ServerRequestFactoryInterface $request, ResponseFactoryInterface $response, Server $server, RequestHandlerInterface $handler, ?LoggerInterface $logger = null)
+    public function __construct(ServerRequestFactoryInterface $request, ResponseFactoryInterface $response, ?LoggerInterface $logger = null)
     {
         $this->request = $request;
         $this->response = $response;
-        $this->server = $server;
-        $this->handler = $handler;
         $this->logger = $logger ?? new NullLogger();
     }
     
@@ -57,32 +55,22 @@ class HttpServer extends HttpCodec
         return $server;
     }
 
-    public function run(): void
+    public function run(Server $server, RequestHandlerInterface $handler): HttpServerListener
     {
-        while (true) {
-            try {
-                $socket = $this->server->accept();
-            } catch (SocketException $e) {
-                continue;
-            }
+        return new HttpServerListener($server, function (SocketStream $socket, Context $context) use ($handler) {
+            $buffer = '';
+            $first = true;
+            $close = true;
 
-            Task::async(\Closure::fromCallable([
-                $this,
-                'handleSocket'
-            ]), $socket);
-        }
-    }
-
-    protected function handleSocket(SocketStream $socket)
-    {
-        $buffer = '';
-
-        try {
             do {
                 $socket->setOption(TcpSocket::NODELAY, false);
 
-                if (null === ($request = $this->readRequest($socket, $buffer))) {
+                if (null === ($request = $this->readRequest($context, $socket, $buffer, $first))) {
                     break;
+                }
+
+                if ($first) {
+                    $first = false;
                 }
 
                 $tokens = \array_fill_keys(\array_map('strtolower', \preg_split("'\s*,\s*'", $request->getHeaderLine('Connection'))), true);
@@ -99,7 +87,7 @@ class HttpServer extends HttpCodec
                     ]);
                 }
 
-                $response = $this->handler->handle($request);
+                $response = $handler->handle($request);
                 $response = $response->withoutHeader('Connection');
 
                 if ($request->getProtocolVersion() == '1.0') {
@@ -110,15 +98,7 @@ class HttpServer extends HttpCodec
 
                 $this->sendResponse($socket, $request, $response, $close);
             } while (!$close);
-        } catch (\Throwable $e) {
-            $this->logger->error(\sprintf('%s: %s', \get_class($e), $e->getMessage()), [
-                'exception' => $e
-            ]);
-
-            throw $e;
-        } finally {
-            $socket->close();
-        }
+        }, $this->logger);
     }
     
     protected function handleUpgrade(UpgradeHandler $handler, SocketStream $socket, string $buffer, ServerRequestInterface $request)
@@ -136,7 +116,7 @@ class HttpServer extends HttpCodec
         $handler->handleConnection(new UpgradeStream($request, $response, $socket, $buffer));
     }
 
-    protected function readRequest(SocketStream $socket, string & $buffer): ?ServerRequestInterface
+    protected function readRequest(Context $context, SocketStream $socket, string & $buffer, bool $first): ?ServerRequestInterface
     {
         $remaining = 0x4000;
 
@@ -145,7 +125,17 @@ class HttpServer extends HttpCodec
                 throw new \RuntimeException('Maximum HTTP header size exceeded');
             }
 
-            $chunk = $socket->read($remaining);
+            if (!$first && $buffer === '') {
+                $chunk = $context->run(static function () use ($socket, $remaining) {
+                    try {
+                        return $socket->read($remaining);
+                    } catch (CancellationException $e) {
+                        // Graceful shutdown requested, treat this like EOF.
+                    }
+                });
+            } else {
+                $chunk = $socket->read($remaining);
+            }
 
             if ($chunk === null) {
                 if ($buffer === '') {
@@ -169,7 +159,7 @@ class HttpServer extends HttpCodec
         if (!\preg_match("'^\s*(\S+)\s+(\S+)\s+HTTP/(1\\.[01])\s*$'is", $line, $m)) {
             throw new \RuntimeException('Invalid HTTP request line received');
         }
-        
+
         $request = $this->request->createServerRequest($m[1], $m[2]);
         $request = $request->withProtocolVersion($m[3]);
         $request = $this->populateHeaders($request, \substr($header, $pos + 1));

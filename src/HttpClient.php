@@ -15,6 +15,7 @@ namespace Concurrent\Http;
 
 use Concurrent\Network\SocketStream;
 use Concurrent\Network\TcpSocket;
+use Concurrent\Stream\StreamClosedException;
 use Psr\Http\Client\ClientInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
@@ -46,27 +47,37 @@ class HttpClient extends HttpCodec implements ClientInterface
 
         $encrypted = ($uri->getScheme() == 'https') ? true : false;
         $host = $uri->getHost();
+        $port = $uri->getPort();
 
-        if (false === ($i = \strrpos($host, ':'))) {
+        if (empty($port)) {
             $port = $encrypted ? 443 : 80;
-        } else {
-            $port = (int) \substr($host, $i + 1);
-            $host = \substr($host, 0, $i);
         }
 
-        $conn = $this->manager->checkout($host, $port, $encrypted);
+        for ($i = 0; $i < 3; $i++) {
+            $conn = $this->manager->checkout($host, $port, $encrypted);
 
-        try {
-            $this->writeRequest($conn->socket, $request);
+            try {
+                $this->writeRequest($conn->socket, clone $request);
 
-            $conn->socket->setOption(TcpSocket::NODELAY, false);
-        } catch (\Throwable $e) {
-            $this->manager->release($conn, $e);
+                $conn->socket->setOption(TcpSocket::NODELAY, false);
+            } catch (\Throwable $e) {
+                $this->manager->release($conn, $e);
 
-            throw $e;
+                if ($e instanceof StreamClosedException) {
+                    continue;
+                }
+
+                throw $e;
+            }
+
+            $response = $this->readResponse($conn, $request);
+
+            if ($response !== null) {
+                return $response;
+            }
         }
 
-        return $this->readResponse($conn, $request);
+        throw new \RuntimeException(\sprintf('Failed to send HTTP request after %u attempts', $i - 1));
     }
 
     public function upgrade(RequestInterface $request): UpgradeStream
@@ -75,31 +86,37 @@ class HttpClient extends HttpCodec implements ClientInterface
 
         $encrypted = ($uri->getScheme() == 'https') ? true : false;
         $host = $uri->getHost();
+        $port = $uri->getPort();
 
-        if (false === ($i = \strrpos($host, ':'))) {
+        if (empty($port)) {
             $port = $encrypted ? 443 : 80;
-        } else {
-            $port = (int) \substr($host, $i + 1);
-            $host = \substr($host, 0, $i);
         }
 
-        $conn = $this->manager->checkout($host, $port, $encrypted);
+        for ($i = 0; $i < 3; $i++) {
+            $conn = $this->manager->checkout($host, $port, $encrypted);
 
-        try {
-            $this->manager->detach($conn);
+            try {
+                $this->manager->detach($conn);
 
-            $this->writeRequest($conn->socket, $request, true);
+                $this->writeRequest($conn->socket, $request, true);
 
-            $conn->socket->setOption(TcpSocket::NODELAY, true);
+                $conn->socket->setOption(TcpSocket::NODELAY, true);
 
-            $response = $this->readResponse($conn, $request, true);
-        } catch (\Throwable $e) {
-            $conn->socket->close($e);
+                $response = $this->readResponse($conn, $request, true);
 
-            throw $e;
+                if ($response === null) {
+                    continue;
+                }
+            } catch (\Throwable $e) {
+                $conn->socket->close($e);
+
+                throw $e;
+            }
+
+            return new UpgradeStream($request, $response, $conn->socket, $conn->buffer);
         }
 
-        return new UpgradeStream($request, $response, $conn->socket, $conn->buffer);
+        throw new \RuntimeException(\sprintf('Failed to perform HTTP upgrade after %u attempts', $i - 1));
     }
 
     protected function writeRequest(SocketStream $socket, RequestInterface $request, bool $upgrade = false): void
@@ -208,14 +225,18 @@ class HttpClient extends HttpCodec implements ClientInterface
         }
     }
 
-    protected function readResponse(Connection $conn, RequestInterface $request, bool $upgrade = false): ResponseInterface
+    protected function readResponse(Connection $conn, RequestInterface $request, bool $upgrade = false): ?ResponseInterface
     {
         try {
             while (false === ($pos = \strpos($conn->buffer, "\r\n\r\n"))) {
                 $chunk = $conn->socket->read();
 
                 if ($chunk === null) {
-                    throw new \RuntimeException('Failed to read next HTTP request');
+                    if ($conn->buffer === '') {
+                        return null;
+                    }
+                    
+                    throw new \RuntimeException('Failed to read next HTTP response');
                 }
 
                 $conn->buffer .= $chunk;

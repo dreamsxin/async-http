@@ -11,6 +11,9 @@
 
 declare(strict_types = 1);
 
+use Concurrent\Deferred;
+use Concurrent\SignalWatcher;
+use Concurrent\Timer;
 use Concurrent\Http\HttpServer;
 use Concurrent\Network\TcpServer;
 use Monolog\Logger;
@@ -24,7 +27,7 @@ use Psr\Log\LoggerInterface;
 require_once __DIR__ . '/../vendor/autoload.php';
 
 error_reporting(-1);
-ini_set('display_errors', '1');
+ini_set('display_errors', (DIRECTORY_SEPARATOR == '\\') ? '0' : '1');
 
 $logger = new Logger('HTTP', [], [
     new PsrLogMessageProcessor()
@@ -51,7 +54,7 @@ $handler = new class($factory, $logger) implements RequestHandlerInterface {
             'target' => $request->getRequestTarget(),
             'version' => $request->getProtocolVersion()
         ]);
-        
+
         $path = $request->getUri()->getPath();
 
         if ($path == '/favicon.ico') {
@@ -70,12 +73,30 @@ $handler = new class($factory, $logger) implements RequestHandlerInterface {
     }
 };
 
+$wait = function () {
+    if (empty($_SERVER['argv'][1] ?? null)) {
+        (new SignalWatcher(SignalWatcher::SIGINT))->awaitSignal();
+    } else {
+        (new Timer(4000))->awaitTimeout();
+    }
+};
+
 $tcp = TcpServer::listen('127.0.0.1', 8080);
+$server = new HttpServer($factory, $factory, $logger);
 
-$logger->info('Server listening on tcp://{address}:{port}', [
-    'address' => $tcp->getAddress(),
-    'port' => $tcp->getPort()
-]);
+for ($i = 0; $i < 3; $i++) {
+    $listener = $server->run($tcp, $handler);
 
-$server = new HttpServer($factory, $factory, $tcp, $handler, $logger);
-$server->run();
+    $logger->info('HTTP server listening on tcp://{address}:{port}', [
+        'address' => $tcp->getAddress(),
+        'port' => $tcp->getPort()
+    ]);
+
+    $wait();
+
+    $logger->info('HTTP server shutdown requested');
+
+    Deferred::transform($listener->shutdown(), function () use ($logger) {
+        $logger->info('Shutdown completed');
+    });
+}
