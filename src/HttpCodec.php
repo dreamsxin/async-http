@@ -143,12 +143,19 @@ abstract class HttpCodec
                         }
                     }
 
-                    $chunk = \substr($buffer, 0, $remainder);
-                    $buffer = \substr($buffer, \strlen($chunk));
+                    if ($remainder > ($len = \strlen($buffer))) {
+                        $remainder -= $len;
 
-                    $remainder -= \strlen($chunk);
+                        yield $buffer;
+                    } else {
+                        $chunk = \substr($buffer, 0, $remainder);
+                        $len = \strlen($chunk);
 
-                    yield $chunk;
+                        $buffer = \substr($buffer, $len);
+                        $remainder -= $len;
+
+                        yield $chunk;
+                    }
                 }
 
                 $buffer = \substr($buffer, 2);
