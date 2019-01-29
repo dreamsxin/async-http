@@ -25,27 +25,27 @@ abstract class StreamAdapter implements StreamInterface
     {
         $this->close();
     }
-    
+
     public function __toString()
     {
         return $this->getContents();
     }
-    
+
     public function close()
     {
         $this->buffer = null;
     }
-    
+
     public function isReadable()
     {
         return true;
     }
-    
+
     public function isSeekable()
     {
         return false;
     }
-    
+
     public function isWritable()
     {
         return false;
@@ -67,13 +67,13 @@ abstract class StreamAdapter implements StreamInterface
         if ($this->buffer === null) {
             throw new \RuntimeException('Cannot read from closed stream');
         }
-        
-        if ($this->buffer === '') {
-            $this->buffer = $this->readNextChunk();
-        }
 
         if ($this->buffer === '') {
-            return '';
+            $this->buffer = $this->readNextChunk();
+
+            if ($this->buffer === '') {
+                return '';
+            }
         }
 
         $chunk = \substr($this->buffer, 0, $length);
@@ -120,7 +120,7 @@ abstract class StreamAdapter implements StreamInterface
         if ($this->buffer === null) {
             return true;
         }
-        
+
         if ($this->buffer === '') {
             $this->buffer = $this->readNextChunk();
         }

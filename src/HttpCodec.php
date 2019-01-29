@@ -18,7 +18,7 @@ use Psr\Http\Message\MessageInterface;
 
 abstract class HttpCodec
 {
-    protected const DATE_RFC1123 = 'D, d M Y H:i:s \G\M\T';
+    public const DATE_RFC1123 = 'D, d M Y H:i:s \G\M\T';
         
     private const HEADER_REGEX = "(^([^()<>@,;:\\\"/[\]?={}\x01-\x20\x7F]++):[ \t]*+((?:[ \t]*+[\x21-\x7E\x80-\xFF]++)*+)[ \t]*+\r\n)m";
 
@@ -48,16 +48,24 @@ abstract class HttpCodec
     {
         if ($message->hasHeader('Content-Length')) {
             $message = $message->withoutHeader('Transfer-Encoding');
-            
+
             if (($len = (int) $message->getHeaderLine('Content-Length')) > 0) {
                 $message = $message->withBody(new IteratorStream($this->readLengthDelimitedBody($stream, $len, $buffer)));
             } elseif ($stream instanceof ClientStream) {
                 $stream->release();
             }
-        } elseif ('chunked' == \strtolower($message->getHeaderLine('Transfer-Encoding'))) {
+
+            return $message;
+        }
+
+        if ('chunked' == \strtolower($message->getHeaderLine('Transfer-Encoding'))) {
             $message = $message->withoutHeader('Transfer-Encoding');
             $message = $message->withBody(new IteratorStream($this->readChunkEncodedBody($stream, $buffer)));
-        } elseif ($stream instanceof ClientStream) {
+
+            return $message;
+        }
+
+        if ($stream instanceof ClientStream) {
             if ($message->getProtocolVersion() == '1.0') {
                 if ('keep-alive' === \strtolower($message->getHeaderLine('Connection'))) {
                     $stream->release();

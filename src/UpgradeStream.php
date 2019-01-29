@@ -73,12 +73,12 @@ class UpgradeStream implements ReadableStream, WritableStream
     {
         if ($this->buffer === '') {
             $this->buffer = $this->socket->read();
+            
+            if ($this->buffer === '') {
+                return null;
+            }
         }
-
-        if ($this->buffer === '') {
-            return null;
-        }
-
+        
         $chunk = \substr($this->buffer, 0, $length ?? 8192);
         $this->buffer = \substr($this->buffer, \strlen($chunk));
 
