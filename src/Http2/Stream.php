@@ -16,6 +16,7 @@ namespace Concurrent\Http\Http2;
 use Concurrent\Channel;
 use Concurrent\Deferred;
 use Concurrent\Task;
+use Concurrent\Stream\StreamClosedException;
 use Psr\Http\Message\MessageInterface;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
@@ -25,9 +26,7 @@ class Stream
 {
     protected $id;
 
-    protected $conn;
-
-    protected $hpack;
+    protected $state;
     
     protected $defer;
     
@@ -35,15 +34,51 @@ class Stream
     
     protected $channel;
     
-    protected $sendWindow = 0xFFFF;
+    protected $receiveWindow;
+    
+    protected $receiveDefer;
+    
+    protected $sendWindow;
     
     protected $sendDefer;
 
-    public function __construct(int $id, Connection $conn, HPack $hpack)
+    public function __construct(int $id, ConnectionState $state)
     {
         $this->id = $id;
-        $this->conn = $conn;
-        $this->hpack = $hpack;
+        $this->state = $state;
+
+        $this->receiveWindow = $state->localSettings[Connection::SETTING_INITIAL_WINDOW_SIZE];
+        $this->sendWindow = $state->remoteSettings[Connection::SETTING_INITIAL_WINDOW_SIZE];
+    }
+
+    public function close(?\Throwable $e = null): void
+    {
+        if (empty($this->state->streams[$this->id])) {
+            return;
+        }
+        
+        unset($this->state->streams[$this->id]);
+
+        if ($this->channel !== null) {
+            $channel = $this->channel;
+            $this->channel = null;
+
+            $channel->close($e);
+        }
+
+        if ($this->sendDefer !== null) {
+            $defer = $this->sendDefer;
+            $this->sendDefer = null;
+
+            $defer->fail($e ?? new StreamClosedException('Stream has been closed'));
+        }
+
+        if ($this->receiveDefer !== null) {
+            $defer = $this->receiveDefer;
+            $this->receiveDefer = null;
+
+            $defer->fail($e ?? new StreamClosedException('Stream has been closed'));
+        }
     }
 
     public function processFrame(Frame $frame): void
@@ -83,6 +118,24 @@ class Stream
                 break;
             case Frame::DATA:
                 $data = $frame->getPayload();
+                $len = \strlen($data);
+
+                $this->receiveWindow -= $len;
+                $this->state->receiveWindow -= $len;
+
+                if ($this->state->receiveWindow < 0) {
+                    if ($this->state->receiveDefer === null) {
+                        $this->state->receiveDefer = new Deferred();
+                    }
+
+                    Task::await($this->state->receiveDefer);
+                }
+
+                if ($this->receiveWindow < 0) {
+                    $this->receiveDefer = new Deferred();
+
+                    Task::await($this->receiveDefer->awaitable());
+                }
                 
                 try {
                     if ($data !== '') {
@@ -90,12 +143,12 @@ class Stream
                     }
                 } finally {
                     if ($frame->flags & Frame::END_STREAM) {
-                        $this->channel->close();
+                        $this->close();
                     }
                 }                
                 break;
             case Frame::WINDOW_UPDATE:
-                $this->sendWindow += (int) \unpack('N', $frame->getPayload())[0];
+                $this->sendWindow += (int) \unpack('N', $frame->getPayload())[1];
 
                 if ($this->sendDefer) {
                     $defer = $this->sendDefer;
@@ -106,10 +159,32 @@ class Stream
                 break;
         }
     }
-    
+
     public function updateReceiveWindow(int $size): void
     {
-        
+        $frame = new Frame(Frame::WINDOW_UPDATE, 0, \pack('N', $size));
+
+        $this->state->sendFramesAsync([
+            $frame,
+            new Frame(Frame::WINDOW_UPDATE, $this->id, $frame->data)
+        ]);
+
+        $this->receiveWindow += $size;
+        $this->state->receiveWindow += $size;
+
+        if ($this->state->receiveDefer !== null) {
+            $defer = $this->state->receiveDefer;
+            $this->state->receiveDefer = null;
+
+            $defer->resolve();
+        }
+
+        if ($this->receiveDefer !== null) {
+            $defer = $this->receiveDefer;
+            $this->receiveDefer = null;
+
+            $defer->resolve();
+        }
     }
 
     public function sendRequest(RequestInterface $request, ResponseFactoryInterface $factory): ResponseInterface
@@ -139,7 +214,7 @@ class Stream
         $this->defer = new Deferred();
 
         try {
-            $headers = $this->hpack->decode(Task::await($this->defer->awaitable()));
+            $headers = $this->state->hpack->decode(Task::await($this->defer->awaitable()));
         } finally {
             $this->defer = null;
         }
@@ -154,7 +229,7 @@ class Stream
         }
 
         if ($this->channel !== null) {
-            $response = $response->withBody(new EntityStream($this->id, $this->conn, $this->channel));
+            $response = $response->withBody(new EntityStream($this, $this->channel->getIterator()));
         }
 
         return $response;
@@ -174,10 +249,9 @@ class Stream
     protected function sendHeaders(string $headers, bool $nobody = false)
     {
         $flags = Frame::END_HEADERS | ($nobody ? Frame::END_STREAM : Frame::NOFLAG);
-        $chunkSize = 8192;
 
-        if (\strlen($headers) > $chunkSize) {
-            $parts = \str_split($headers, $chunkSize);
+        if (\strlen($headers) > 0x4000) {
+            $parts = \str_split($headers, 0x4000);
             $frames = [];
 
             $frames[] = new Frame(Frame::HEADERS, $this->id, $parts[0]);
@@ -188,9 +262,9 @@ class Stream
 
             $frames[] = new Frame(Frame::CONTINUATION, $this->id, $parts[\count($parts) - 1], $flags);
 
-            $this->conn->sendFrames($frames);
+            $this->state->sendFrames($frames);
         } else {
-            $this->conn->sendFrame(new Frame(Frame::HEADERS, $this->id, $headers, $flags));
+            $this->state->sendFrame(new Frame(Frame::HEADERS, $this->id, $headers, $flags));
         }
     }
 
@@ -201,29 +275,53 @@ class Stream
         if ($body->isSeekable()) {
             $body->rewind();
         }
+        
+        $sent = 0;
 
         try {
-            $chunkSize = 8192;
-            $sent = 0;
-
             while (!$body->eof()) {
-                $chunk = $body->read($chunkSize);
+                $chunk = $body->read(0x4000);
 
                 if ($chunk === '') {
                     continue;
                 }
 
-                $sent += \strlen($chunk);
+                $len = \strlen($chunk);
 
-                $this->conn->sendFrame(new Frame(Frame::DATA, $this->id, $chunk));
+                do {
+                    if ($len > $this->sendWindow) {
+                        $this->sendDefer = new Deferred();
+
+                        Task::await($this->sendDefer);
+
+                        continue;
+                    }
+
+                    if ($len > $this->state->sendWindow) {
+                        if ($this->state->sendDefer === null) {
+                            $this->state->sendDefer = new Deferred();
+                        }
+
+                        Task::await($this->sendDefer);
+
+                        continue;
+                    }
+                } while (false);
+
+                $sent += $len;
+
+                $this->sendWindow -= $len;
+                $this->state->sendWindow -= $len;
+
+                $this->state->sendFrame(new Frame(Frame::DATA, $this->id, $chunk));
             }
 
-            $this->conn->sendFrame(new Frame(Frame::DATA, $this->id, '', Frame::END_STREAM));
-
-            return $sent;
+            $this->state->sendFrame(new Frame(Frame::DATA, $this->id, '', Frame::END_STREAM));
         } finally {
             $body->close();
         }
+
+        return $sent;
     }
 
     protected function encodeHeaders(MessageInterface $message, array $headers, array $remove = [])
@@ -268,6 +366,6 @@ class Stream
             }
         }
 
-        return $this->hpack->encode($headerList);
+        return $this->state->hpack->encode($headerList);
     }
 }

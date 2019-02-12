@@ -13,13 +13,16 @@ declare(strict_types = 1);
 
 namespace Concurrent\Http\Http2;
 
+use Concurrent\CancellationException;
 use Concurrent\Context;
 use Concurrent\Deferred;
 use Concurrent\Task;
 use Concurrent\Network\SocketStream;
+use Concurrent\Stream\StreamClosedException;
 use Psr\Http\Message\RequestInterface;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
+use Psr\Log\LoggerInterface;
 
 class Connection
 {
@@ -37,221 +40,215 @@ class Connection
     public const SETTING_MAX_CONCURRENT_STREAMS = 0x03;
     
     public const SETTING_INITIAL_WINDOW_SIZE = 0x04;
-    
+
     public const SETTING_MAX_FRAME_SIZE = 0x05;
-    
+
     public const SETTING_MAX_HEADER_LIST_SIZE = 0x06;
-    
-    protected $socket;
-    
-    protected $hpack;
-    
-    protected $buffer;
-    
-    protected $client;
-    
-    protected $streams;
-    
-    protected $nextStreamId;
-    
-    protected $receiveWindow = 0xFFFF;
-    
-    protected $sendWindow = 0xFFFF;
 
-    protected function __construct(SocketStream $socket, HPack $hpack, ?Deferred $defer = null, string $buffer = '')
+    protected $state;
+    
+    protected $task;
+    
+    protected $cancel;
+
+    protected function __construct(SocketStream $socket, HPack $hpack, array $settings, ?Deferred $defer = null, string $buffer = '', ?LoggerInterface $logger = null)
     {
-        $this->socket = $socket;
-        $this->hpack = $hpack;
-        $this->buffer = $buffer;
-        $this->client = $defer ? true : false;
+        $this->state = $state = new ConnectionState($socket, $hpack, $settings, $defer !== null);
 
-        $streams = [];
-        
-        $this->streams = & $streams;
-        $this->nextStreamId = $this->client ? 1 : 2;
+        $context = Context::current();
+        $background = Context::background()->withCancel($this->cancel);
 
-        $task = Task::asyncWithContext(Context::background(), static function () use ($socket, $buffer, $defer, & $streams) {
-            $len = \strlen($buffer);
+        $this->task = Task::asyncWithContext($background, static function () use ($state, $defer, $buffer, $logger, $context) {
+            $e = null;
 
-            while (true) {
-                while ($len < 9) {
-                    if (null === ($chunk = $socket->read())) {
-                        break;
+            try {
+                return static::processFrames($state, $defer, $buffer);
+            } catch (CancellationException $e) {
+                $context->run(function () use ($state) {
+                    $frame = new Frame(Frame::GOAWAY, 0, \pack('NN', $state->lastStreamId, 0));
+
+                    try {
+                        $state->socket->write($frame->encode());
+                    } finally {
+                        $state->socket->close();
                     }
-                    
-                    $buffer .= $chunk;
-                    $len += \strlen($chunk);
+                });
+            } catch (StreamClosedException $e) {
+                // Cannot do anything about this if it happens.
+            } catch (\Throwable $e) {
+                if ($logger) {
+                    $this->logger->error(\sprintf('%s: %s', \get_class($e), $e->getMessage()), [
+                        'exception' => $e
+                    ]);
                 }
-
-                $header = \substr($buffer, 0, 9);
-
-                $buffer = \substr($buffer, 9);
-                $len -= 9;
-
-                $length = \unpack('N', "\x00" . $header)[1];
-                $stream = \unpack('N', "\x7F\xFF\xFF\xFF" & \substr($header, 5, 4))[1];
-
-                if ($length == 0) {
-                    $frame = new Frame(\ord($header[3]), $stream, '', \ord($header[4]));
-                } else {
-                    while ($len < $length) {
-                        if (null === ($chunk = $socket->read())) {
-                            break;
-                        }
-
-                        $buffer .= $chunk;
-                        $len += \strlen($chunk);
-                    }
-
-                    $frame = new Frame(\ord($header[3]), $stream, \substr($buffer, 0, $length), \ord($header[4]));
-
-                    $buffer = \substr($buffer, $length);
-                    $len -= $length;
-                }
-
-                \fwrite(STDERR, "IN << {$frame}\n");
-                
-                if ($frame->type == Frame::GOAWAY) {
-                    break;
-                }
-                
-                // Ignore upgrade response.
-                if ($frame->stream == 1) {
-                    continue;
-                }
-
-                if ($frame->type == Frame::SETTINGS && !($frame->flags & Frame::ACK)) {
-                    $frame = new Frame(Frame::SETTINGS, 0, '', Frame::ACK);
-
-                    \fwrite(STDERR, "OUT >> {$frame}\n");
-
-                    $socket->write($frame->encode());
-
-                    if ($defer) {
-                        $tmp = $defer;
-                        $defer = null;
-
-                        $frame = new Frame(Frame::WINDOW_UPDATE, 0, \pack('N', 0x0FFFFFFF));
-
-                        \fwrite(STDERR, "OUT >> {$frame}\n");
-
-                        $socket->write($frame->encode());
-
-                        $tmp->resolve();
-                    }
-
-                    continue;
-                }
-                
-                if ($frame->type == Frame::WINDOW_UPDATE) {
-                    $this->sendWindow += (int) \unpack('N', $frame->getPayload())[0];
-                    
-                    if ($this->sendDefer) {
-                        $defer = $this->sendDefer;
-                        $this->sendDefer = null;
-                        
-                        $defer->resolve();
-                    }
-                }
-
-                if ($frame->stream == 0) {
-                    continue;
-                }
-
-                if (empty($streams[$frame->stream])) {
-                    break;
-                }
-                
-                $streams[$frame->stream]->processFrame($frame);
             }
-        });
 
-        Deferred::transform($task, function (?\Throwable $e) {
-            if ($e) {
-                \fwrite(STDERR, $e->getMessage() . "\n\n");
+            if ($e && $defer) {
+                $defer->fail($e);
             }
         });
     }
-    
-    public static function connect(SocketStream $socket, HPack $hpack, string $buffer = ''): Connection
+
+    public function __destruct()
     {
-        $conn = new Connection($socket, $hpack, $defer = new Deferred(), $buffer);
+        if ($this->cancel !== null) {
+            $cancel = $this->cancel;
+            $this->cancel = null;
+            
+            $cancel();
+        }
+        
+        $this->state->close();
+    }
+
+    public static function connect(SocketStream $socket, HPack $hpack, array $settings, string $buffer = '', ?LoggerInterface $logger = null): Connection
+    {
+        $conn = new Connection($socket, $hpack, $settings, $defer = new Deferred(), $buffer, $logger);
 
         Task::await($defer->awaitable());
 
         return $conn;
     }
 
-    public function __debugInfo(): array
+    public function close(?\Throwable $e = null): void
     {
-        return [
-            'socket' => $this->socket
-        ];
-    }
+        if ($this->cancel !== null) {
+            $cancel = $this->cancel;
+            $this->cancel = null;
 
-    public function sendFrame(Frame $frame): void
-    {
-        \fwrite(STDERR, "OUT >> {$frame}\n");
-        
-        $this->socket->write($frame->encode());
-    }
-    
-    public function sendFrameAsync(Frame $frame): void
-    {
-        \fwrite(STDERR, "OUT (Q) >> {$frame}\n");
-        
-        $this->socket->writeAsync($frame->encode());
-    }
-
-    public function sendFrames(array $frames): void
-    {
-        $buffer = '';
-
-        foreach ($frames as $frame) {
-            \fwrite(STDERR, "OUT >> {$frame}\n");
-            
-            $buffer .= $frame->encode();
+            $cancel();
         }
 
-        $this->socket->write($buffer);
+        Task::await($this->task);
+
+        $this->state->close($e);
     }
-    
-    public function sendFramesAsync(array $frames): void
+
+    public function ping(): void
     {
-        $buffer = '';
-
-        foreach ($frames as $frame) {
-            \fwrite(STDERR, "OUT (Q) >> {$frame}\n");
-
-            $buffer .= $frame->encode();
-        }
-
-        $this->socket->writeAsync($buffer);
+        Task::await($this->state->ping());
     }
 
-    public function updateReceiveWindow(int $size, ?int $stream = null): void
-    {
-        $frame = new Frame(Frame::WINDOW_UPDATE, 0, \pack('N', $size));
-
-        if ($stream === null) {
-            $this->sendFrameAsync($frame);
-        } else {
-            $this->sendFramesAsync([
-                $frame,
-                new Frame(Frame::WINDOW_UPDATE, $stream, $frame->data)
-            ]);
-            
-            $this->streams[$stream]->updateReceiveWindow($size);
-        }
-    }
-    
     public function sendRequest(RequestInterface $request, ResponseFactoryInterface $factory): ResponseInterface
     {
-        $this->nextStreamId += 2;
-        
-        $stream = new Stream($this->nextStreamId, $this, $this->hpack);
-        $this->streams[$this->nextStreamId] = $stream;
-        
+        $id = $this->state->nextStreamId += 2;
+
+        $stream = new Stream($id, $this->state);
+        $this->state->streams[$id] = $stream;
+
         return $stream->sendRequest($request, $factory);
+    }
+
+    protected static function processFrames(ConnectionState $state, ?Deferred $defer = null, string $buffer = '')
+    {
+        $len = \strlen($buffer);
+
+        while (true) {
+            while ($len < 9) {
+                if (null === ($chunk = $state->socket->read())) {
+                    throw new \Error('Connection closed by remote peer');
+                }
+
+                $buffer .= $chunk;
+                $len += \strlen($chunk);
+            }
+
+            $header = \substr($buffer, 0, 9);
+
+            $buffer = \substr($buffer, 9);
+            $len -= 9;
+
+            $length = \unpack('N', "\x00" . $header)[1];
+            $stream = \unpack('N', "\x7F\xFF\xFF\xFF" & \substr($header, 5, 4))[1];
+
+            if ($length == 0) {
+                $frame = new Frame(\ord($header[3]), $stream, '', \ord($header[4]));
+            } else {
+                while ($len < $length) {
+                    if (null === ($chunk = $state->socket->read())) {
+                        throw new \Error('Connection closed by remote peer');
+                    }
+
+                    $buffer .= $chunk;
+                    $len += \strlen($chunk);
+                }
+
+                $frame = new Frame(\ord($header[3]), $stream, \substr($buffer, 0, $length), \ord($header[4]));
+
+                $buffer = \substr($buffer, $length);
+                $len -= $length;
+            }
+
+            // Ignore upgrade response.
+            if ($frame->stream == 1) {
+                continue;
+            }
+
+            if ($frame->stream == 0) {
+                // Handle connection frame.
+                switch ($frame->type) {
+                    case Frame::GOAWAY:
+                        throw new \Error('Connection closed by remote peer');
+                    case Frame::SETTINGS:
+                        if (!($frame->flags & Frame::ACK)) {
+                            $state->processSettings($frame);
+                            
+                            if ($defer) {
+                                $tmp = $defer;
+                                $defer = null;
+
+                                $tmp->resolve();
+                            }
+                        }
+                        break;
+                    case Frame::WINDOW_UPDATE:
+                        $state->sendWindow += (int) \unpack('N', $frame->getPayload())[1];
+
+                        if ($state->sendDefer) {
+                            $tmp = $state->sendDefer;
+                            $state->sendDefer = null;
+
+                            $tmp->resolve();
+                        }
+                        break;
+                    case Frame::PING:
+                        if ($frame->flags & Frame::ACK) {
+                            $state->processPing($frame);
+                        } else {
+                            $state->sendFrameAsync(new Frame(Frame::PING, 0, $frame->getPayload(), Frame::ACK));
+                        }
+                        break;
+                    case Frame::DATA:
+                    case Frame::HEADERS:
+                    case Frame::CONTINUATION:
+                    case Frame::PRIORITY:
+                    case Frame::RST_STREAM:
+                        throw new \Error('Invalid connection frame received');
+                }
+            } else {
+                // Handle stream frame.
+                if (empty($state->streams[$frame->stream])) {
+                    switch ($frame->type) {
+                        case Frame::WINDOW_UPDATE:
+                        case Frame::PRIORITY:
+                            continue 2;
+                    }
+
+                    break;
+                }
+
+                switch ($frame->type) {
+                    case Frame::RST_STREAM:
+                        $state->streams[$frame->stream]->close(new StreamClosedException('Remote peer closed the stream'));
+                        break;
+                    case Frame::SETTINGS:
+                    case Frame::PING:
+                    case Frame::GOAWAY:
+                        throw new \Error('Invalid stream frame received');
+                    default:
+                        $state->streams[$frame->stream]->processFrame($frame);
+                }
+            }
+        }
     }
 }

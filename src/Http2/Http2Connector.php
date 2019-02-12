@@ -15,9 +15,37 @@ namespace Concurrent\Http\Http2;
 
 use Concurrent\Network\SocketStream;
 use Psr\Http\Message\RequestInterface;
+use Psr\Log\LoggerInterface;
 
 class Http2Connector
 {
+    protected $settings;
+
+    public function __construct(array $settings = [], ?LoggerInterface $logger = null)
+    {
+        $config = [
+            Connection::SETTING_ENABLE_PUSH => 0,
+            Connection::SETTING_MAX_CONCURRENT_STREAMS => 256,
+            Connection::SETTING_INITIAL_WINDOW_SIZE => Connection::INITIAL_WINDOW_SIZE,
+            Connection::SETTING_MAX_FRAME_SIZE => 0x4000,
+            Connection::SETTING_HEADER_TABLE_SIZE => 0
+        ];
+
+        foreach ($settings as $k => $v) {
+            switch ($k) {
+                case Connection::SETTING_MAX_CONCURRENT_STREAMS:
+                    $config[$k] = (int) $v;
+                    break;
+                case Connection::SETTING_MAX_FRAME_SIZE:
+                    $config[$k] = (int) $v;
+                    break;
+            }
+        }
+
+        $this->settings = $config;
+        $this->logger = $logger;
+    }
+
     public function getProtocols(): array
     {
         return [
@@ -33,25 +61,17 @@ class Http2Connector
 
         return (float) $request->getProtocolVersion() >= 2;
     }
-    
+
     public function isSupported(string $protocol): bool
     {
         return $protocol == 'h2';
     }
 
-    protected $localSettings = [
-        Connection::SETTING_ENABLE_PUSH => 0,
-        Connection::SETTING_MAX_CONCURRENT_STREAMS => 256,
-        Connection::SETTING_INITIAL_WINDOW_SIZE => Connection::INITIAL_WINDOW_SIZE,
-        Connection::SETTING_MAX_FRAME_SIZE => 16384,
-        Connection::SETTING_HEADER_TABLE_SIZE => 0
-    ];
-
     public function connect(SocketStream $socket): Connection
     {
         $settings = '';
 
-        foreach ($this->localSettings as $k => $v) {
+        foreach ($this->settings as $k => $v) {
             $settings .= \pack('nN', $k, $v);
         }
 
@@ -59,16 +79,16 @@ class Http2Connector
         $header .= (new Frame(Frame::SETTINGS, 0, $settings))->encode();
         $header .= (new Frame(Frame::WINDOW_UPDATE, 0, \pack('N', 0x0FFFFFFF)))->encode();
 
-        $socket->write($header);
+        $socket->writeAsync($header);
 
-        return Connection::connect($socket, new HPack(new HPackClientContext()));
+        return Connection::connect($socket, new HPack(new HPackClientContext()), $this->settings, '', $this->logger);
     }
     
     public function upgrade(SocketStream $socket, string $host): Connection
     {
         $settings = '';
 
-        foreach ($this->localSettings as $k => $v) {
+        foreach ($this->settings as $k => $v) {
             $settings .= \pack('nN', $k, $v);
         }
 
@@ -118,8 +138,8 @@ class Http2Connector
         $header .= (new Frame(Frame::SETTINGS, 0, $settings))->encode();
         $header .= (new Frame(Frame::WINDOW_UPDATE, 0, \pack('N', 0x0FFFFFFF)))->encode();
         
-        $socket->write($header);
+        $socket->writeAsync($header);
 
-        return Connection::connect($socket, new HPack(new HPackClientContext()), $buffer);
+        return Connection::connect($socket, new HPack(new HPackClientContext()), $this->settings, $buffer, $this->logger);
     }
 }

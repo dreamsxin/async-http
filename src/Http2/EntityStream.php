@@ -13,34 +13,30 @@ declare(strict_types = 1);
 
 namespace Concurrent\Http\Http2;
 
-use Concurrent\Channel;
 use Concurrent\Http\StreamAdapter;
 
 class EntityStream extends StreamAdapter
 {
-    protected $id;
-    
-    protected $conn;
+    protected $stream;
     
     protected $channel;
     
     protected $it;
     
-    public function __construct(int $id, Connection $conn, Channel $channel)
+    public function __construct(Stream $stream, \Iterator $it)
     {
-        $this->id = $id;
-        $this->conn = $conn;
-        $this->channel = $channel;
-        
-        $this->it = $channel->getIterator();
+        $this->stream = $stream;
+        $this->it = $it;
     }
-    
+
     public function close()
     {
-        $this->buffer = null;
-        $this->channel->close();
+        if ($this->buffer !== null) {
+            $this->buffer = null;
+            $this->stream->close();
+        }
     }
-    
+
     protected function readNextChunk(): string
     {
         while ($this->it->valid()) {
@@ -48,7 +44,7 @@ class EntityStream extends StreamAdapter
             $this->it->next();
 
             if ($chunk !== '') {
-                $this->conn->updateReceiveWindow(strlen($chunk), $this->id);
+                $this->stream->updateReceiveWindow(\strlen($chunk));
 
                 return $chunk;
             }
