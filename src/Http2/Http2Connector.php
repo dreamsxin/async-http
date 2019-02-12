@@ -14,7 +14,6 @@ declare(strict_types = 1);
 namespace Concurrent\Http\Http2;
 
 use Concurrent\Network\SocketStream;
-use Psr\Http\Message\RequestInterface;
 use Psr\Log\LoggerInterface;
 
 class Http2Connector
@@ -51,20 +50,6 @@ class Http2Connector
         return [
             'h2'
         ];
-    }
-
-    public function isRequestSupported(RequestInterface $request): bool
-    {
-        if ($request->getUri()->getScheme() != 'https') {
-            return false;
-        }
-
-        return (float) $request->getProtocolVersion() >= 2;
-    }
-
-    public function isSupported(string $protocol): bool
-    {
-        return $protocol == 'h2';
     }
 
     public function connect(SocketStream $socket): Connection

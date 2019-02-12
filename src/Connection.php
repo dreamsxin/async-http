@@ -14,6 +14,7 @@ declare(strict_types = 1);
 namespace Concurrent\Http;
 
 use Concurrent\Network\SocketStream;
+use Concurrent\Network\TlsInfo;
 
 class Connection
 {
@@ -30,13 +31,16 @@ class Connection
     public $expires = 0;
     
     public $buffer = '';
+    
+    public $tls;
 
-    public function __construct(string $key, SocketStream $socket)
+    public function __construct(string $key, SocketStream $socket, ?TlsInfo $tls = null)
     {
         static $counter = 'a';
 
         $this->id = $counter++;
         $this->key = $key;
         $this->socket = $socket;
+        $this->tls = $tls;
     }
 }

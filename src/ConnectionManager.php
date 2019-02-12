@@ -100,7 +100,7 @@ class ConnectionManager
         }
     }
 
-    public function checkout(string $host, int $port, bool $encrypted = false): Connection
+    public function checkout(string $host, int $port, bool $encrypted = false, array $alpn = []): Connection
     {
         if ($this->timer === null) {
             $this->timer = new Timer($this->interval);
@@ -132,7 +132,7 @@ class ConnectionManager
                     'port' => $port
                 ]);
 
-                $conn = $this->connect($key);
+                $conn = $this->connect($key, $alpn);
 
                 break;
             }
@@ -209,7 +209,7 @@ class ConnectionManager
         $conn->socket->close($e);
     }
 
-    protected function connect(string $key): Connection
+    protected function connect(string $key, array $alpn): Connection
     {
         if (isset($this->counts[$key])) {
             $this->counts[$key]++;
@@ -223,6 +223,10 @@ class ConnectionManager
             if ($encrypt !== '') {
                 $tls = new TlsClientEncryption();
                 $tls = $tls->withPeerName($encrypt);
+
+                if (!empty($alpn)) {
+                    $tls = $tls->withAlpnProtocols(...$alpn);
+                }
             } else {
                 $tls = null;
             }
@@ -231,10 +235,12 @@ class ConnectionManager
 
             try {
                 if ($encrypt) {
-                    $socket->encrypt();
+                    $info = $socket->encrypt();
+                } else {
+                    $info = null;
                 }
 
-                return new Connection($key, $socket);
+                return new Connection($key, $socket, $info);
             } catch (\Throwable $e) {
                 $socket->close();
 

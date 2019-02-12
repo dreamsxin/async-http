@@ -13,6 +13,9 @@ declare(strict_types = 1);
 
 namespace Concurrent\Http;
 
+use Concurrent\Deferred;
+use Concurrent\Task;
+use Concurrent\Http\Http2\Http2Connector;
 use Concurrent\Network\SocketStream;
 use Concurrent\Network\TcpSocket;
 use Concurrent\Stream\StreamClosedException;
@@ -30,12 +33,19 @@ class HttpClient extends HttpCodec implements ClientInterface
     protected $factory;
 
     protected $logger;
+    
+    protected $http2;
+    
+    protected $upgraded = [];
+    
+    protected $checking = [];
 
-    public function __construct(ConnectionManager $manager, ResponseFactoryInterface $factory, ?LoggerInterface $logger = null)
+    public function __construct(ConnectionManager $manager, ResponseFactoryInterface $factory, ?LoggerInterface $logger = null, ?Http2Connector $http2 = null)
     {
         $this->manager = $manager;
         $this->factory = $factory;
         $this->logger = $logger ?? new NullLogger();
+        $this->http2 = $http2;
     }
 
     /**
@@ -53,8 +63,69 @@ class HttpClient extends HttpCodec implements ClientInterface
             $port = $encrypted ? 443 : 80;
         }
 
+        if ($encrypted) {
+            if ($this->http2) {
+                $alpn = \array_merge($this->http2->getProtocols(), [
+                    'http/1.1'
+                ]);
+            } else {
+                $alpn = [
+                    'http/1.1'
+                ];
+            }
+        } else {
+            $alpn = [];
+        }
+
+        $key = $host . '|' . $port;
+
+        if (isset($this->checking[$key])) {
+            Task::await($this->checking[$key]);
+        }
+
+        if (!empty($this->upgraded[$key])) {
+            return $this->upgraded[$key]->sendRequest($request, $this->factory);
+        }
+
+        if (!isset($this->upgraded[$key])) {
+            $defer = new Deferred();
+            $this->checking[$key] = $defer->awaitable();
+        } else {
+            $defer = null;
+        }
+
         for ($i = 0; $i < 3; $i++) {
-            $conn = $this->manager->checkout($host, $port, $encrypted);
+            try {
+                $conn = $this->manager->checkout($host, $port, $encrypted, $alpn);
+            } catch (\Throwable $e) {
+                if ($defer) {
+                    unset($this->checking[$key]);
+                    $defer->resolve();
+                }
+
+                throw $e;
+            }
+
+            if ($encrypted && ($conn->tls->alpn_protocol ?? null) == 'h2') {
+                try {
+                    $this->manager->detach($conn);
+                    $this->upgraded[$key] = $this->http2->connect($conn->socket);
+                } catch (\Throwable $e) {
+                    if ($defer) {
+                        unset($this->checking[$key]);
+                        $defer->resolve();
+                    }
+
+                    throw $e;
+                }
+
+                return $this->upgraded[$key]->sendRequest($request, $this->factory);
+            }
+
+            if ($defer) {
+                $this->upgraded[$key] = null;
+                $defer->resolve();
+            }
 
             try {
                 $this->writeRequest($conn->socket, clone $request);
