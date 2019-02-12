@@ -112,17 +112,20 @@ class HttpClient extends HttpCodec implements ClientInterface
                     $this->upgraded[$key] = $this->http2->connect($conn->socket);
                 } catch (\Throwable $e) {
                     if ($defer) {
-                        unset($this->checking[$key]);
                         $defer->resolve();
                     }
 
                     throw $e;
+                } finally {
+                    unset($this->checking[$key]);
                 }
 
                 return $this->upgraded[$key]->sendRequest($request, $this->factory);
             }
 
             if ($defer) {
+                unset($this->checking[$key]);
+                
                 $this->upgraded[$key] = null;
                 $defer->resolve();
             }

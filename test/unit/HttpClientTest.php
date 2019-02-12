@@ -114,14 +114,16 @@ class HttpClientTest extends AsyncTestCase
         $http2 = new Http2Connector([], $this->logger);
         $client = new HttpClient($this->manager, $this->factory, $this->logger, $http2);
 
-        $request = $this->factory->createRequest('PUT', 'https://http2.golang.org/ECHO');
-        $request = $request->withHeader('Content-Type', 'text/plain');
-        $request = $request->withBody($this->factory->createStream($message));
+        for ($i = 0; $i < 3; $i++) {
+            $request = $this->factory->createRequest('PUT', 'https://http2.golang.org/ECHO');
+            $request = $request->withHeader('Content-Type', 'text/plain');
+            $request = $request->withBody($this->factory->createStream($message . ' #' . $i));
 
-        $response = $client->sendRequest($request);
+            $response = $client->sendRequest($request);
 
-        $this->assertEquals(200, $response->getStatusCode());
-        $this->assertEquals('2.0', $response->getProtocolVersion());
-        $this->assertEquals(strtoupper($message), $response->getBody()->getContents());
+            $this->assertEquals(200, $response->getStatusCode());
+            $this->assertEquals('2.0', $response->getProtocolVersion());
+            $this->assertEquals(strtoupper($message) . ' #' . $i, $response->getBody()->getContents());
+        }
     }
 }
