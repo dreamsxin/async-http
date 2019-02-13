@@ -14,6 +14,7 @@ declare(strict_types = 1);
 namespace Concurrent\Http\Http2;
 
 use Concurrent\Awaitable;
+use Concurrent\Channel;
 use Concurrent\Deferred;
 use Concurrent\Network\SocketStream;
 
@@ -32,12 +33,16 @@ class ConnectionState
     public $lastStreamId = 0;
     
     public $receiveWindow = Connection::INITIAL_WINDOW_SIZE;
+        
+    public $receiveChannel;
     
-    public $receiveDefer;
+    public $receiveReady;
     
     public $sendWindow = Connection::INITIAL_WINDOW_SIZE;
     
-    public $sendDefer;
+    public $sendChannel;
+    
+    public $sendReady;
 
     public $localSettings = [];
 
@@ -60,6 +65,12 @@ class ConnectionState
         $this->client = $client;
 
         $this->nextStreamId = $client ? 1 : 2;
+        
+        $this->receiveChannel = new Channel();
+        $this->receiveReady = $this->receiveChannel->getIterator();
+        
+        $this->sendChannel = new Channel();
+        $this->sendReady = $this->sendChannel->getIterator();
     }
     
     public function close(?\Throwable $e = null): void

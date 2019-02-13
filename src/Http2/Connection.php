@@ -204,11 +204,8 @@ class Connection
                     case Frame::WINDOW_UPDATE:
                         $state->sendWindow += (int) \unpack('N', $frame->getPayload())[1];
 
-                        if ($state->sendDefer) {
-                            $tmp = $state->sendDefer;
-                            $state->sendDefer = null;
-
-                            $tmp->resolve();
+                        while ($state->sendWindow > 0 && $state->sendChannel->isReadyForSend()) {
+                            $state->sendChannel->send(null);
                         }
                         break;
                     case Frame::PING:

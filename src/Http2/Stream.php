@@ -36,19 +36,29 @@ class Stream
     
     protected $receiveWindow;
     
-    protected $receiveDefer;
+    protected $receiveChannel;
+    
+    protected $receiveReady;
     
     protected $sendWindow;
     
-    protected $sendDefer;
+    protected $sendChannel;
+    
+    protected $sendReady;
 
     public function __construct(int $id, ConnectionState $state)
     {
         $this->id = $id;
         $this->state = $state;
 
-        $this->receiveWindow = $state->localSettings[Connection::SETTING_INITIAL_WINDOW_SIZE];
+        $this->receiveWindow = $state->localSettings[Connection::SETTING_INITIAL_WINDOW_SIZE];        
         $this->sendWindow = $state->remoteSettings[Connection::SETTING_INITIAL_WINDOW_SIZE];
+        
+        $this->receiveChannel = new Channel();
+        $this->receiveReady = $this->receiveChannel->getIterator();
+        
+        $this->sendChannel = new Channel();
+        $this->sendReady = $this->sendChannel->getIterator();
     }
 
     public function close(?\Throwable $e = null): void
@@ -65,20 +75,9 @@ class Stream
 
             $channel->close($e);
         }
-
-        if ($this->sendDefer !== null) {
-            $defer = $this->sendDefer;
-            $this->sendDefer = null;
-
-            $defer->fail($e ?? new StreamClosedException('Stream has been closed'));
-        }
-
-        if ($this->receiveDefer !== null) {
-            $defer = $this->receiveDefer;
-            $this->receiveDefer = null;
-
-            $defer->fail($e ?? new StreamClosedException('Stream has been closed'));
-        }
+        
+        $this->receiveChannel->close($e ?? new StreamClosedException('Stream has been closed'));
+        $this->sendChannel->close($e ?? new StreamClosedException('Stream has been closed'));
     }
 
     public function processFrame(Frame $frame): void
@@ -123,18 +122,12 @@ class Stream
                 $this->receiveWindow -= $len;
                 $this->state->receiveWindow -= $len;
 
-                if ($this->state->receiveWindow < 0) {
-                    if ($this->state->receiveDefer === null) {
-                        $this->state->receiveDefer = new Deferred();
-                    }
-
-                    Task::await($this->state->receiveDefer);
-                }
-
                 if ($this->receiveWindow < 0) {
-                    $this->receiveDefer = new Deferred();
-
-                    Task::await($this->receiveDefer->awaitable());
+                    $this->receiveReady->next();
+                }
+                
+                if ($this->state->receiveWindow < 0) {
+                    $this->state->receiveReady->next();
                 }
                 
                 try {
@@ -150,11 +143,8 @@ class Stream
             case Frame::WINDOW_UPDATE:
                 $this->sendWindow += (int) \unpack('N', $frame->getPayload())[1];
 
-                if ($this->sendDefer) {
-                    $defer = $this->sendDefer;
-                    $this->sendDefer = null;
-
-                    $defer->resolve();
+                if ($this->sendWindow > 0 && $this->sendChannel->isReadyForSend()) {
+                    $this->sendChannel->send(null);
                 }
                 break;
         }
@@ -172,18 +162,12 @@ class Stream
         $this->receiveWindow += $size;
         $this->state->receiveWindow += $size;
 
-        if ($this->state->receiveDefer !== null) {
-            $defer = $this->state->receiveDefer;
-            $this->state->receiveDefer = null;
-
-            $defer->resolve();
+        while ($this->state->receiveWindow > 0 && $this->state->receiveChannel->isReadyForSend()) {
+            $this->state->receiveChannel->send(null);
         }
 
-        if ($this->receiveDefer !== null) {
-            $defer = $this->receiveDefer;
-            $this->receiveDefer = null;
-
-            $defer->resolve();
+        while ($this->receiveWindow > 0 && $this->receiveChannel->isReadyForSend()) {
+            $this->receiveChannel->send(null);
         }
     }
 
@@ -275,7 +259,7 @@ class Stream
         if ($body->isSeekable()) {
             $body->rewind();
         }
-        
+
         $sent = 0;
 
         try {
@@ -288,32 +272,34 @@ class Stream
 
                 $len = \strlen($chunk);
 
-                do {
-                    if ($len > $this->sendWindow) {
-                        $this->sendDefer = new Deferred();
+                while ($len > 0) {
+                    $available = \max(0, \min($len, $this->sendWindow, $this->state->sendWindow));
 
-                        Task::await($this->sendDefer);
-
-                        continue;
-                    }
-
-                    if ($len > $this->state->sendWindow) {
-                        if ($this->state->sendDefer === null) {
-                            $this->state->sendDefer = new Deferred();
+                    if ($available == 0) {
+                        if ($this->sendWindow <= 0) {
+                            $this->sendReady->next();
+                        } else {
+                            $this->state->sendReady->next();
                         }
 
-                        Task::await($this->sendDefer);
-
                         continue;
                     }
-                } while (false);
+                    
+                    $this->sendWindow -= $available;
+                    $this->state->sendWindow -= $available;
 
+                    if ($available < $len) {
+                        $this->state->sendFrame(new Frame(Frame::DATA, $this->id, \substr($chunk, 0, $available)));
+
+                        $chunk = \substr($chunk, $available);
+                    } else {
+                        $this->state->sendFrame(new Frame(Frame::DATA, $this->id, $chunk));
+                    }
+
+                    $len -= $available;
+                }
+                
                 $sent += $len;
-
-                $this->sendWindow -= $len;
-                $this->state->sendWindow -= $len;
-
-                $this->state->sendFrame(new Frame(Frame::DATA, $this->id, $chunk));
             }
 
             $this->state->sendFrame(new Frame(Frame::DATA, $this->id, '', Frame::END_STREAM));
