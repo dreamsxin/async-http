@@ -28,6 +28,20 @@ class EntityStream extends StreamAdapter
         $this->stream = $stream;
         $this->it = $it;
     }
+    
+    public function __destruct()
+    {
+        $this->stream->close();
+    }
+
+    public function __debugInfo(): array
+    {
+        return [
+            'stream' => $this->stream,
+            'closed' => ($this->buffer === null),
+            'buffer' => \sprintf('%u bytes buffered', \strlen($this->buffer ?? ''))
+        ];
+    }
 
     public function close()
     {

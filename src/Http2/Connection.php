@@ -100,6 +100,13 @@ class Connection
         
         $this->state->close();
     }
+    
+    public function __debugInfo(): array
+    {
+        return [
+            'active' => ($this->cancel === null)
+        ];
+    }
 
     public static function connect(SocketStream $socket, HPack $hpack, array $settings, string $buffer = '', ?LoggerInterface $logger = null): Connection
     {

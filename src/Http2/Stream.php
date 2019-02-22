@@ -60,20 +60,31 @@ class Stream
         $this->sendChannel = new Channel();
         $this->sendReady = $this->sendChannel->getIterator();
     }
+    
+    public function __debugInfo(): array
+    {
+        return [
+            'id' => $this->id
+        ];
+    }
 
     public function close(?\Throwable $e = null): void
     {
         if (empty($this->state->streams[$this->id])) {
             return;
         }
-        
+
         unset($this->state->streams[$this->id]);
 
         if ($this->channel !== null) {
             $channel = $this->channel;
             $this->channel = null;
 
-            $channel->close($e);
+            if (!$channel->isClosed()) {
+                $this->state->sendFrameAsync(new Frame(Frame::RST_STREAM, $this->id, \pack('n', 0)));
+
+                $channel->close($e);
+            }
         }
         
         $this->receiveChannel->close($e ?? new StreamClosedException('Stream has been closed'));
@@ -136,6 +147,8 @@ class Stream
                     }
                 } finally {
                     if ($frame->flags & Frame::END_STREAM) {
+                        $this->channel->close();
+                        
                         $this->close();
                     }
                 }                
@@ -158,13 +171,14 @@ class Stream
             $frame,
             new Frame(Frame::WINDOW_UPDATE, $this->id, $frame->data)
         ]);
-
-        $this->receiveWindow += $size;
+        
         $this->state->receiveWindow += $size;
 
         while ($this->state->receiveWindow > 0 && $this->state->receiveChannel->isReadyForSend()) {
             $this->state->receiveChannel->send(null);
         }
+        
+        $this->receiveWindow += $size;
 
         while ($this->receiveWindow > 0 && $this->receiveChannel->isReadyForSend()) {
             $this->receiveChannel->send(null);

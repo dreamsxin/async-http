@@ -12,12 +12,24 @@
 namespace Concurrent\Http\Http2;
 
 use Concurrent\AsyncTestCase;
-use Concurrent\Network\TcpSocket;
-use Concurrent\Network\TlsClientEncryption;
+use Concurrent\Http\ConnectionManager;
+use Concurrent\Http\HttpClient;
 use Nyholm\Psr7\Factory\Psr17Factory;
 
 class ConnectorTest extends AsyncTestCase
 {
+    public function test()
+    {
+        $client = new HttpClient(new ConnectionManager(), $factory = new Psr17Factory(), null, new Http2Connector());
+
+        $request = $factory->createRequest('GET', 'https://de.wikipedia.org/wiki/Hypertext_Transfer_Protocol');
+        $response = $client->sendRequest($request);
+
+        $this->assertEquals(200, $response->getStatusCode());
+        $this->assertEquals('2.0', $response->getProtocolVersion());
+    }
+    
+    /*
     public function testAlpnConnect()
     {
         $message = 'Hello World :)';
@@ -79,4 +91,5 @@ class ConnectorTest extends AsyncTestCase
             $stream->close();
         }
     }
+    */
 }

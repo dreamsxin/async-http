@@ -26,7 +26,7 @@ class ConnectionState
     
     public $client;
     
-    public $streams;
+    public $streams = [];
     
     public $nextStreamId;
     
@@ -71,6 +71,13 @@ class ConnectionState
         
         $this->sendChannel = new Channel();
         $this->sendReady = $this->sendChannel->getIterator();
+    }
+    
+    public function __debugInfo(): array
+    {
+        return [
+            'streams' => \count($this->streams)
+        ];
     }
     
     public function close(?\Throwable $e = null): void
