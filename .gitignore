@@ -1,0 +1,11 @@
+.buildpath
+.externalToolBuilders
+.git
+.phpunit.*
+.project
+.settings
+.vagrant
+composer.lock
+composer.phar
+coverage
+vendor
