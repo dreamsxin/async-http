@@ -89,7 +89,7 @@ class HttpServerListener
      * @param LoggerInterface $logger Logger being used to log errors.
      * @param int $concurrency Limits the maximum number of concurrent connections that can be handled.
      */
-    public function __construct(Server $server, callable $callback, ?LoggerInterface $logger = null, int $concurrency = 10000)
+    public function __construct(Server $server, callable $callback, ?LoggerInterface $logger = null, int $concurrency = 1000)
     {
         $this->logger = $logger ?? new NullLogger();
         $this->concurrency = $concurrency;

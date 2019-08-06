@@ -78,12 +78,13 @@ $handler = new class($factory, $logger) implements RequestHandlerInterface {
 
     public function handle(ServerRequestInterface $request): ResponseInterface
     {
+        /*
         $this->logger->debug('{method} {target} HTTP/{version}', [
             'method' => $request->getMethod(),
             'target' => $request->getRequestTarget(),
             'version' => $request->getProtocolVersion()
         ]);
-
+        */
         $path = $request->getUri()->getPath();
 
         if ($path == '/favicon.ico') {
@@ -147,19 +148,24 @@ $tls = null;
 
 $tcp = TcpServer::listen('127.0.0.1', 8080);
 
-for ($i = 0; $i < 3; $i++) {
-    $listener = $server->run($tcp, $handler);
+$total = 1;
+$listeners = [];
+for ($i = 0; $i < $total; $i++) {
+    $listeners[$i] = $server->run($tcp, $handler);
+}
 
-    $logger->info('HTTP server listening on tcp://{address}:{port}', [
-        'address' => $tcp->getAddress(),
-        'port' => $tcp->getPort()
-    ]);
+$logger->info('HTTP server listening on tcp://{address}:{port}', [
+	'address' => $tcp->getAddress(),
+	'port' => $tcp->getPort()
+]);
 
-    $signal->awaitSignal();
+$signal->awaitSignal();
 
-    $logger->info('HTTP server shutdown requested');
+$logger->info('HTTP server shutdown requested');
 
-    $listener->shutdown();
+for ($i = 0; $i < $total; $i++) {
+    $listener = $listeners[$i];
+	$listener->shutdown();
 
     Task::async(function () use ($listener, $logger) {
         try {
