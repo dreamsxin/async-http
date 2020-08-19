@@ -17,8 +17,8 @@ Provides an HTTP client and server example implementation backed by the `async` 
 The HTTP client is `PSR-18` compliant and implements `ClientInterface`. It requires a `PSR-17` response factory to convert incoming responses into `PSR-7` response objects. The client is completely async yet it does not make use or callbacks, promises, or any other kind of an async API. All network IO is non-blocking but the body stream of the HTTP request object you pass in might be blocking. You can execute multiple concurrent HTTP requests by making use of different `Task` objects (see [ext-async](https://github.com/concurrent-php/ext-async)).
 
 ```php
-use Concurrent\Http\HttpClient;
-use Concurrent\Http\HttpClientConfig;
+use Phalcon\Async\Http\HttpClient;
+use Phalcon\Async\Http\HttpClientConfig;
 
 $factory = new \Nyholm\Psr7\Factory\Psr17Factory();
 $client = new HttpClient(new HttpClientConfig($factory));
@@ -46,9 +46,9 @@ Decorator that reads all HTTP response bodies into strings before returning an H
 The HTTP server uses an async TCP server and translates incoming HTTP requests into `PSR-7` server request objects using a `PSR-17` server request factory. The requests are passed to a `PSR-15` request handler that is responsible for creating an HTTP response. The server can handle many HTTP requests concurrently due to non-blocking socket IO. Performance will degrade if you do blocking IO (filesystem access, DB queries, etc.) or CPU intensive processing in your request handler.
 
 ```php
-use Concurrent\Http\HttpServer;
-use Concurrent\Http\HttpServerConfig;
-use Concurrent\Network\TcpServer;
+use Phalcon\Async\Http\HttpServer;
+use Phalcon\Async\Http\HttpServerConfig;
+use Phalcon\Async\Network\TcpServer;
 use Psr\Http\Message\ResponseFactoryInterface;
 use Psr\Http\Message\ResponseInterface;
 use Psr\Http\Message\ServerRequestInterface;

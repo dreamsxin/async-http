@@ -70,7 +70,7 @@ class ClientStream implements ReadableStream
     /**
      * {@inheritdoc}
      */
-    public function read(?int $length = null): ?string
+    public function read(?int $length = null, ?int $timeout = NULL): ?string
     {
         if ($this->conn === null) {
             return null;

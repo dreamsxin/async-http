@@ -3,10 +3,10 @@
 	"description" : "HTTP Client & Server",
 	"type" : "library",
 	"license" : "MIT",
-	"homepage" : "https://github.com/concurrent-php/http",
+	"homepage" : "https://github.com/dreamsxin/async-http",
 	"authors" : [{
-			"name" : "Martin Schröder",
-			"email" : "m.schroeder2007@gmail.com"
+			"name" : "Dreamszhu",
+			"email" : "dreamsxin@qq.com"
 		}
 	],
 	"minimum-stability" : "dev",
@@ -30,12 +30,7 @@
 	},
 	"autoload" : {
 		"psr-4" : {
-			"Concurrent\\Http\\" : "src/"
-		}
-	},
-	"autoload-dev" : {
-		"psr-4" : {
-			"Concurrent\\Http\\" : "test/src/"
+			"Phalcon\\Async\\Http\\" : "src/"
 		}
 	}
 }

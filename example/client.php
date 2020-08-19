@@ -40,7 +40,7 @@ $client = new HttpClient($config);
 $i = 0;
 
 while (true) {
-    $request = $factory->createRequest('GET', 'https://localhost:8080/');
+    $request = $factory->createRequest('GET', 'http://localhost:8080/');
     $response = $client->sendRequest($request);
 
     print_r(array_map(function ($v) {
